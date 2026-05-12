@@ -88,6 +88,12 @@ const ROTATION_COOLDOWN_MS    = envInt('CCA_ROTATION_COOLDOWN_MS', 60_000);  // 
 // rotation count alone. Set to a low value (e.g. 5) if you want the original
 // bail-after-N safety net back.
 const MAX_ROTATIONS           = envInt('CCA_MAX_ROTATIONS', 999);
+// v6.2: upscaler stage is now off by default. The saver pulls Gemini's
+// native full-size render (~2752x1536) via the "Download full size image"
+// button, which already exceeds the 2560-wide target — so realesrgan would
+// be a no-op (or worse, a needless re-encode). Set CCA_UPSCALE_ENABLED=1
+// to re-enable as a safety net if Gemini ever falls back to smaller sizes.
+const UPSCALE_ENABLED         = envInt('CCA_UPSCALE_ENABLED', 0) === 1;
 // Silent-blocker fallback: when detectBlocker() in save_images.cjs misses the
 // 1095 UI (tab still shows "Stop", language mismatch, banner under different DOM),
 // no alerts get written and the rotation path never fires. The orchestrator
@@ -470,7 +476,14 @@ process.on('SIGTERM', () => { console.log('\n[orch] SIGTERM received, shutting d
   // v6.2: per-image upscaler watcher runs alongside submit + save. It picks
   // up each new PNG as it appears, upscales with realesrgan-x4plus, replaces
   // the original in place. The DONE block below waits for it to drain.
-  spawnUpscaler();
+  // Disabled by default in v6.2 because the new saver already pulls Gemini's
+  // native 2752x1536 render — realesrgan would be a no-op. Re-enable with
+  // CCA_UPSCALE_ENABLED=1.
+  if (UPSCALE_ENABLED) {
+    spawnUpscaler();
+  } else {
+    console.log(`${ts()} [ORCH] upscaler stage disabled (set CCA_UPSCALE_ENABLED=1 to enable)`);
+  }
 
   setInterval(async () => {
     if (rescueInFlight) return;  // skip ticks while rescue is mutating state
@@ -497,9 +510,14 @@ process.on('SIGTERM', () => { console.log('\n[orch] SIGTERM received, shutting d
     if (saved.length >= TOTAL) {
       const imagesDir = chapterImagesDir(PROMPTS_PATH);
       const onDisk = diskSavedIndices(imagesDir).length;
-      const upscaled = diskUpscaledCount(imagesDir);
+      // When the upscaler is disabled, treat the upscale gate as satisfied
+      // (the new saver pulls Gemini's native 2752x1536 directly — nothing to
+      // upscale). Only require diskUpscaledCount when CCA_UPSCALE_ENABLED=1.
+      const upscaled = UPSCALE_ENABLED ? diskUpscaledCount(imagesDir) : onDisk;
       if (onDisk >= TOTAL && upscaled >= TOTAL) {
-        console.log(`\n${ts()} [ORCH] === DONE ===  ${saved.length}/${TOTAL} saved + upscaled (disk-verified ${onDisk}/${TOTAL}, upscaled ${upscaled}/${TOTAL})`);
+        const tag = UPSCALE_ENABLED ? 'saved + upscaled' : 'saved';
+        const upMsg = UPSCALE_ENABLED ? `, upscaled ${upscaled}/${TOTAL}` : '';
+        console.log(`\n${ts()} [ORCH] === DONE ===  ${saved.length}/${TOTAL} ${tag} (disk-verified ${onDisk}/${TOTAL}${upMsg})`);
         console.log(`${ts()} [ORCH] images at: ${imagesDir}`);
         console.log(`${ts()} [ORCH] saver restarted ${Math.max(0, saverRestarts - 1)} times, rescued ${rescueAttempts} times`);
         killAll();
