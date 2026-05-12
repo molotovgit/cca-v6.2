@@ -34,6 +34,9 @@ chrome-gemini-cdp/
 # Submit/save runtime state (per-chapter, rebuilt on each run)
 .cca/
 
+# Local pipeline run logs
+logs/
+
 # Node deps
 node_modules/
 

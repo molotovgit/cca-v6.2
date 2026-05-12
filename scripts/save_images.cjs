@@ -22,6 +22,13 @@ const TAB_MAP_FILE       = path.join(STATE_DIR, 'tab_map.json');
 const SAVED_FILE         = path.join(STATE_DIR, 'saved_indices.json');
 const BLOCKER_ALERTS_FILE = path.join(STATE_DIR, 'blocker_alerts.json');
 
+// v6.2: per-saver download intercept dir. The in-chat <img> blob is a 1024x572
+// preview; the real generated image (2752x1536 / 2528x1696) only arrives via
+// the "Download full size image" button on the message. We point Chrome's
+// download path at this dir, click the button, and move the resulting
+// Gemini_Generated_Image_<guid>.png into our chapter dir with the right name.
+const DOWNLOAD_DIR = path.join(STATE_DIR, 'gemini_downloads');
+
 function readJsonOr(file, def) {
   try { return JSON.parse(fs.readFileSync(file, 'utf-8')); } catch (_) { return def; }
 }
@@ -137,6 +144,74 @@ async function exportToBuffer(page, src) {
   return Buffer.from(arr);
 }
 
+// v6.2: Click the "Download full size image" button on a Gemini message and
+// capture the resulting Gemini_Generated_Image_*.png that lands in DOWNLOAD_DIR.
+// Returns the absolute path of the downloaded file, or throws on timeout.
+//
+// Race-safety: takes a snapshot of existing files in DOWNLOAD_DIR before the
+// click, then watches for a new entry (set-difference). Since the saver loop
+// processes one tab at a time, the only way another file could appear is an
+// external actor — extremely unlikely during a run.
+function snapshotDownloads(dirs) {
+  const seen = new Map();
+  for (const d of dirs) {
+    if (!fs.existsSync(d)) continue;
+    for (const f of fs.readdirSync(d)) {
+      if (!/^Gemini_Generated_Image.*\.png$/i.test(f)) continue;
+      seen.set(path.join(d, f), true);
+    }
+  }
+  return seen;
+}
+
+async function clickAndCaptureDownload(page, watchDirs, timeoutMs = 20_000) {
+  for (const d of watchDirs) fs.mkdirSync(d, { recursive: true });
+  const before = snapshotDownloads(watchDirs);
+
+  const clicked = await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button,[role=button]'));
+    // Aria label is "Download full size image" — exact match preferred,
+    // partial allowed for localised variants ("Загрузить полноразмерное...").
+    let btn = btns.find(b => /^download full size image$/i.test(
+      (b.getAttribute('aria-label') || '').trim()
+    ));
+    if (!btn) {
+      btn = btns.find(b => /download full size/i.test(
+        b.getAttribute('aria-label') || b.innerText || ''
+      ));
+    }
+    if (!btn) return false;
+    btn.scrollIntoView({ block: 'center' });
+    btn.click();
+    return true;
+  });
+  if (!clicked) throw new Error('Download full size image button not found');
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const now = snapshotDownloads(watchDirs);
+    const fresh = [];
+    for (const p of now.keys()) if (!before.has(p)) fresh.push(p);
+    if (fresh.length) {
+      // Pick the newest by mtime if multiple
+      const full = fresh
+        .map(p => ({ p, mtime: fs.statSync(p).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime)[0].p;
+      // Wait until size stops changing (download still in flight)
+      let last = -1; let stable = 0;
+      while (Date.now() < deadline) {
+        const sz = fs.statSync(full).size;
+        if (sz === last && sz > 1024) { stable++; if (stable >= 3) break; }
+        else { stable = 0; last = sz; }
+        await sleep(150);
+      }
+      return full;
+    }
+    await sleep(150);
+  }
+  throw new Error('timed out waiting for Gemini download to appear in ' + watchDirs.join(' or '));
+}
+
 (async () => {
   const promptsPath = process.argv[2];
   if (!promptsPath) {
@@ -167,6 +242,26 @@ async function exportToBuffer(page, src) {
     browserURL: `http://127.0.0.1:${CDP_PORT}`,
     defaultViewport: null,
   });
+
+  // v6.2: configure Chrome's download path for this browser. Browser-level
+  // CDP is the modern API; we also try the deprecated Page-level form as a
+  // belt-and-suspenders fallback. If both fail the click flow still works
+  // because we watch the user's default Downloads folder too — see the
+  // WATCH_DIRS list below.
+  fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+  const USER_DOWNLOADS = path.join(require('os').homedir(), 'Downloads');
+  const WATCH_DIRS = [DOWNLOAD_DIR, USER_DOWNLOADS];
+  try {
+    const bSession = await browser.target().createCDPSession();
+    await bSession.send('Browser.setDownloadBehavior', {
+      behavior: 'allow',
+      downloadPath: DOWNLOAD_DIR,
+      eventsEnabled: false,
+    });
+    console.log(`[save] downloads redirected via CDP to ${DOWNLOAD_DIR}`);
+  } catch (e) {
+    console.log(`[save] CDP download redirect failed (${e.message}); will watch ${USER_DOWNLOADS}`);
+  }
 
   let iter = 0;
   while (true) {
@@ -237,13 +332,28 @@ async function exportToBuffer(page, src) {
         }
 
         try {
-          const buf = await exportToBuffer(page, found.src);
+          // v6.2: the in-chat <img> is a 1024x572 preview blob. Click the
+          // "Download full size image" button instead — that delivers the
+          // native ~2752x1536 render Gemini actually generated.
+          const dlPath = await clickAndCaptureDownload(page, WATCH_DIRS, 20_000);
           const outFile = path.join(outDir, `${String(entry.idx).padStart(3, '0')}-${entry.slug}.png`);
-          fs.writeFileSync(outFile, buf);
+          fs.renameSync(dlPath, outFile);  // atomic move; deletes the source
+          const sz = fs.statSync(outFile).size;
+          // Best-effort dimension read from PNG IHDR (24-byte header)
+          let dims = '';
+          try {
+            const fd = fs.openSync(outFile, 'r');
+            const hdr = Buffer.alloc(24);
+            fs.readSync(fd, hdr, 0, 24, 0);
+            fs.closeSync(fd);
+            if (hdr.slice(1, 4).toString() === 'PNG') {
+              dims = `${hdr.readUInt32BE(16)}x${hdr.readUInt32BE(20)}`;
+            }
+          } catch (_) {}
           savedIdxs.add(entry.idx);
           writeJson(SAVED_FILE, [...savedIdxs]);
           savedThisIter++;
-          console.log(`[save] ${String(entry.idx).padStart(3, '0')} ${entry.slug}  → ${found.w}x${found.h} ${(buf.length / 1024).toFixed(0)} KB`);
+          console.log(`[save] ${String(entry.idx).padStart(3, '0')} ${entry.slug}  → ${dims || 'png'} ${(sz / 1024).toFixed(0)} KB`);
 
           if (closeTabs) {
             try { await page.close(); } catch (_) {}
