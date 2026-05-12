@@ -19,6 +19,19 @@ const CDP_PORT  = parseInt(process.env.GEMINI_CDP_PORT || '9223', 10);
 const GEMINI_URL = 'https://gemini.google.com/app';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// v6.2: resolution preamble prepended to every Gemini prompt. Even though
+// the saved bytes ultimately come out at Gemini's internal canvas size
+// (~1024-wide) and the upscale_watcher.py stage takes them to 2560x1440
+// post-generation, the preamble is kept because (a) it nudges Gemini to
+// produce the highest-fidelity render it can within its canvas, and
+// (b) it locks the 16:9 aspect ratio Gemini supports.
+// Override with CCA_PROMPT_PREAMBLE env var if needed.
+const PROMPT_PREAMBLE = process.env.CCA_PROMPT_PREAMBLE || (
+  '4K UHD resolution, 2560x1440, 16:9 widescreen aspect ratio, ultra high definition, ' +
+  'ultra sharp, highly detailed, crisp edges, fine detail, professional editorial quality, ' +
+  'no blur, no compression, '
+);
+
 const REPO     = path.resolve(__dirname, '..');
 const STATE_DIR = path.join(REPO, '.cca');
 const TAB_MAP_FILE = path.join(STATE_DIR, 'tab_map.json');
@@ -70,8 +83,11 @@ function diskSavedIndices(imagesDir) {
 }
 
 async function submitPromptOnTab(page, promptText) {
-  const prompt = (promptText || '').replace(/\s*\n\s*/g, ' ').trim();
-  if (!prompt) throw new Error('empty prompt');
+  const rawPrompt = (promptText || '').replace(/\s*\n\s*/g, ' ').trim();
+  if (!rawPrompt) throw new Error('empty prompt');
+  // v6.2: prepend the resolution preamble so Gemini sees the cinematic /
+  // resolution hints BEFORE the scene description.
+  const prompt = PROMPT_PREAMBLE + rawPrompt;
 
   const promptHandle = await page.evaluateHandle(() => {
     const eds = Array.from(document.querySelectorAll('[contenteditable=true]'));
