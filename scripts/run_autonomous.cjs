@@ -1,6 +1,7 @@
-// Autonomous orchestrator: owns submit_prompts + save_images, monitors them,
-// auto-restarts the saver if it stalls, respawns the submitter if it dies
-// with work remaining. Exits when all expected images are saved.
+// Autonomous orchestrator: owns submit_prompts + save_images + upscale_watcher
+// (v6.2), monitors them, auto-restarts the saver if it stalls, respawns the
+// submitter if it dies with work remaining. Exits when all expected images
+// are saved AND upscaled to the 2560-wide target (DONE block gates on both).
 //
 // Run-and-forget — doesn't need any user intervention until done.
 //
@@ -128,6 +129,7 @@ function diskSavedIndices(imagesDir) {
 
 let submitProc = null;
 let saveProc   = null;
+let upscaleProc = null;        // v6.2: per-image upscaler watcher (Python)
 let saveSpawnPending = false;  // true between scheduling spawn and child actually running
 let lastSaveCount = 0;
 let lastProgressTime = Date.now();    // last time saved.length increased; NEVER reset by restarts
@@ -149,6 +151,9 @@ function logSubmit(buf) {
 }
 function logSave(buf) {
   process.stdout.write(buf.toString().split('\n').filter(l => l).map(l => `${ts()} [SAV] ${l}\n`).join(''));
+}
+function logUpscale(buf) {
+  process.stdout.write(buf.toString().split('\n').filter(l => l).map(l => `${ts()} [UP] ${l}\n`).join(''));
 }
 
 function spawnSubmit() {
@@ -183,6 +188,46 @@ function spawnSave() {
   saveProc = p;
 }
 
+// v6.2: spawn the per-image upscaler watcher (Python). Picks up each new PNG
+// as save_images writes it and replaces it in-place with the 2560x1440 version.
+function spawnUpscaler() {
+  const imagesDir = chapterImagesDir(PROMPTS_PATH);
+  const py = process.env.PYTHON || 'python';
+  console.log(`${ts()} [ORCH] spawning upscale_watcher → ${imagesDir}`);
+  const p = spawn(py, ['scripts/upscale_watcher.py', imagesDir], {
+    cwd: REPO,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+  });
+  p.stdout.on('data', logUpscale);
+  p.stderr.on('data', d => process.stderr.write(`${ts()} [UP-ERR] ${d}`));
+  p.on('exit', (code, sig) => {
+    console.log(`${ts()} [ORCH] upscale exited code=${code} sig=${sig}`);
+    upscaleProc = null;
+  });
+  upscaleProc = p;
+}
+
+// Count PNGs that are already at the 2560-wide target. Reads only the PNG IHDR
+// (24 bytes) — no decode. Used to gate the IMAGES-DONE block on upscale drain.
+function diskUpscaledCount(imagesDir, targetW = 2560) {
+  if (!fs.existsSync(imagesDir)) return 0;
+  let n = 0;
+  for (const f of fs.readdirSync(imagesDir)) {
+    if (!f.toLowerCase().endsWith('.png')) continue;
+    if (f.endsWith('.raw.png') || f.endsWith('.up.png')) continue;
+    try {
+      const fd = fs.openSync(path.join(imagesDir, f), 'r');
+      const b = Buffer.alloc(24);
+      fs.readSync(fd, b, 0, 24, 0);
+      fs.closeSync(fd);
+      if (b.slice(0, 8).toString('hex') !== '89504e470d0a1a0a') continue;
+      if (b.readUInt32BE(16) >= targetW) n++;
+    } catch (_) {}
+  }
+  return n;
+}
+
 function scheduleSaveSpawn(reason) {
   if (saveSpawnPending) {
     return;  // already scheduled; don't double-schedule
@@ -201,6 +246,7 @@ function killSave() {
 
 function killAll() {
   if (submitProc) { try { submitProc.kill(); } catch (_) {} submitProc = null; }
+  if (upscaleProc) { try { upscaleProc.kill(); } catch (_) {} upscaleProc = null; }
   killSave();
 }
 
@@ -402,6 +448,10 @@ process.on('SIGTERM', () => { console.log('\n[orch] SIGTERM received, shutting d
     spawnSubmit();
   }
   spawnSave();
+  // v6.2: per-image upscaler watcher runs alongside submit + save. It picks
+  // up each new PNG as it appears, upscales with realesrgan-x4plus, replaces
+  // the original in place. The DONE block below waits for it to drain.
+  spawnUpscaler();
 
   setInterval(async () => {
     if (rescueInFlight) return;  // skip ticks while rescue is mutating state
@@ -428,12 +478,18 @@ process.on('SIGTERM', () => { console.log('\n[orch] SIGTERM received, shutting d
     if (saved.length >= TOTAL) {
       const imagesDir = chapterImagesDir(PROMPTS_PATH);
       const onDisk = diskSavedIndices(imagesDir).length;
-      if (onDisk >= TOTAL) {
-        console.log(`\n${ts()} [ORCH] === DONE ===  ${saved.length}/${TOTAL} saved (disk-verified ${onDisk}/${TOTAL})`);
+      const upscaled = diskUpscaledCount(imagesDir);
+      if (onDisk >= TOTAL && upscaled >= TOTAL) {
+        console.log(`\n${ts()} [ORCH] === DONE ===  ${saved.length}/${TOTAL} saved + upscaled (disk-verified ${onDisk}/${TOTAL}, upscaled ${upscaled}/${TOTAL})`);
         console.log(`${ts()} [ORCH] images at: ${imagesDir}`);
         console.log(`${ts()} [ORCH] saver restarted ${Math.max(0, saverRestarts - 1)} times, rescued ${rescueAttempts} times`);
         killAll();
         process.exit(0);
+      }
+      if (onDisk >= TOTAL && upscaled < TOTAL) {
+        // All saves done; waiting for upscaler to drain its queue.
+        console.log(`${ts()} [ORCH] saved=${onDisk}/${TOTAL} on disk; upscaled=${upscaled}/${TOTAL} — waiting for upscale watcher to drain`);
+        return;
       }
       // State file says complete but disk disagrees — fall through to rescue path
       console.log(`${ts()} [ORCH] state says complete but disk has only ${onDisk}/${TOTAL} — continuing`);
