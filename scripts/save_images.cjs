@@ -170,28 +170,101 @@ function snapshotDownloads(dirs) {
   return seen;
 }
 
+// Selector that recognises "Download full size image" (English + localised
+// variants we've observed) on a Gemini message toolbar. Centralised so the
+// poll-wait and direct-click code paths stay in sync.
+const DL_BUTTON_SELECTOR_FN = () => {
+  const btns = Array.from(document.querySelectorAll('button,[role=button]'));
+  const labelMatchers = [
+    /^download full size image$/i,
+    /download full size/i,
+    /download.*image/i,
+    /\bscarica\b.*\bimmagine\b/i,             // Italian: "Scarica immagine"
+    /(скачать|загрузить).*изображен/i,         // Russian: "Скачать изображение"
+    /(скачать|загрузить).*полн/i,             // Russian: "...полноразмерное"
+    /yuklab.*olish/i,                          // Uzbek: "yuklab olish"
+    /to'?liq.*o'?lcham/i,                      // Uzbek: "to'liq o'lchamdagi rasm"
+    /полный.*размер/i,                         // Russian variant
+  ];
+  for (const rx of labelMatchers) {
+    const hit = btns.find(b => rx.test((b.getAttribute('aria-label') || '').trim())
+                              || rx.test((b.innerText || '').trim()));
+    if (hit) return hit;
+  }
+  return null;
+};
+
 async function clickAndCaptureDownload(page, watchDirs, timeoutMs = 20_000) {
   for (const d of watchDirs) fs.mkdirSync(d, { recursive: true });
   const before = snapshotDownloads(watchDirs);
 
-  const clicked = await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll('button,[role=button]'));
-    // Aria label is "Download full size image" — exact match preferred,
-    // partial allowed for localised variants ("Загрузить полноразмерное...").
-    let btn = btns.find(b => /^download full size image$/i.test(
-      (b.getAttribute('aria-label') || '').trim()
-    ));
-    if (!btn) {
-      btn = btns.find(b => /download full size/i.test(
+  // 1. Poll for the download button: Gemini may inject the toolbar a beat
+  //    after the image finishes rendering. Wait up to 5s before giving up.
+  let clicked = false;
+  const findStart = Date.now();
+  while (Date.now() - findStart < 5_000) {
+    clicked = await page.evaluate((fnStr) => {
+      const fn = new Function('return ' + fnStr)();
+      const btn = fn();
+      if (!btn) return false;
+      btn.scrollIntoView({ block: 'center' });
+      btn.click();
+      return true;
+    }, DL_BUTTON_SELECTOR_FN.toString()).catch(() => false);
+    if (clicked) break;
+    await sleep(300);
+  }
+
+  // 2. If the direct button isn't visible, the menu may be collapsed.
+  //    Click "More options" / "Show more options" / "Ещё" first, then look
+  //    again inside the opened popup.
+  if (!clicked) {
+    const openedMenu = await page.evaluate(() => {
+      const cands = Array.from(document.querySelectorAll('button,[role=button]'));
+      // Prefer the per-message "More options for ..." button (one per
+      // generated image) over the global "Show more options" gear.
+      const moreBtn = cands.find(b => /^more options for /i.test(
+        (b.getAttribute('aria-label') || '').trim()
+      )) || cands.find(b => /^show more options$/i.test(
+        (b.getAttribute('aria-label') || '').trim()
+      )) || cands.find(b => /(more options|показать ещё|больше параметров|ko'?proq)/i.test(
         b.getAttribute('aria-label') || b.innerText || ''
       ));
+      if (!moreBtn) return false;
+      moreBtn.scrollIntoView({ block: 'center' });
+      moreBtn.click();
+      return true;
+    }).catch(() => false);
+    if (openedMenu) {
+      await sleep(450);
+      // Retry the download-button click inside the now-open menu.
+      const findStart2 = Date.now();
+      while (Date.now() - findStart2 < 3_000) {
+        clicked = await page.evaluate((fnStr) => {
+          const fn = new Function('return ' + fnStr)();
+          const btn = fn();
+          if (!btn) return false;
+          btn.click();
+          return true;
+        }, DL_BUTTON_SELECTOR_FN.toString()).catch(() => false);
+        if (clicked) break;
+        await sleep(200);
+      }
     }
-    if (!btn) return false;
-    btn.scrollIntoView({ block: 'center' });
-    btn.click();
-    return true;
-  });
-  if (!clicked) throw new Error('Download full size image button not found');
+  }
+
+  if (!clicked) {
+    // Dump a small diagnostic so the orchestrator log shows what aria-labels
+    // WERE on the page — speeds up future regex extension.
+    const dump = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('button,[role=button]'))
+        .map(b => (b.getAttribute('aria-label') || b.innerText || '').trim().slice(0, 80))
+        .filter(s => s.length > 0)
+        .slice(0, 12);
+    }).catch(() => []);
+    throw new Error('Download full size image button not found. Visible labels (sample): '
+      + JSON.stringify(dump));
+  }
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
