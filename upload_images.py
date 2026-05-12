@@ -178,7 +178,12 @@ def main() -> None:
     if not refined_md.exists():
         raise SystemExit(f"[upload] refined chapter missing: {refined_md} — run REFINE first.")
 
-    out_zip    = REPO / "zips"   / f"g{args.grade}-{args.lang}" / subj_slug / f"{base}.zip"
+    # CCA_ZIP_PREFIX lets a run target a fresh filename without overwriting
+    # an earlier zip already uploaded to the same Notion page — set e.g.
+    # CCA_ZIP_PREFIX=new_ and this run produces "new_ch01-...zip" while leaving
+    # the existing "ch01-...zip" attachment in Notion alone.
+    zip_prefix = os.environ.get("CCA_ZIP_PREFIX", "")
+    out_zip    = REPO / "zips"   / f"g{args.grade}-{args.lang}" / subj_slug / f"{zip_prefix}{base}.zip"
     out_marker = out_zip.with_suffix(".uploaded.json")
 
     # 1.5  STALE-ZIP DETECTION (must run BEFORE the marker idempotency check,
