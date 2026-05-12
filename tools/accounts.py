@@ -115,17 +115,27 @@ def get_active(provider: str, repo_root: Path, *, override_index: Optional[int] 
     return a
 
 
-def rotate(provider: str, repo_root: Path) -> dict:
-    """Advance to the next account; persist state. Raises NoMoreAccountsError
-    if already on the last one."""
+def rotate(provider: str, repo_root: Path, *, wrap: bool = False) -> dict:
+    """Advance to the next account; persist state.
+
+    If wrap=False (default), raises NoMoreAccountsError when called past the
+    last account — caller is expected to handle exhaustion explicitly.
+
+    If wrap=True, wraps to index 0 instead of raising. v6.2 enables this so
+    the orchestrator cycles through Gemini accounts indefinitely; the pipeline
+    never auto-quits on rotation count alone.
+    """
     accs = load_accounts(repo_root)[provider]
     cur = _active_index(repo_root, provider)
     nxt = cur + 1
     if nxt >= len(accs):
-        raise NoMoreAccountsError(
-            f"{provider} accounts exhausted (was at index {cur}/{len(accs)-1}). "
-            f"Add another account to accounts.json or reset()."
-        )
+        if wrap:
+            nxt = 0
+        else:
+            raise NoMoreAccountsError(
+                f"{provider} accounts exhausted (was at index {cur}/{len(accs)-1}). "
+                f"Add another account to accounts.json or reset()."
+            )
     a = dict(accs[nxt])
     a["index"] = nxt
     _set_active_index(repo_root, provider, nxt, a["label"])
@@ -184,6 +194,8 @@ if __name__ == "__main__":
     p.add_argument("cmd", choices=["get", "rotate", "reset", "status"])
     p.add_argument("provider", nargs="?", default=None,
                    help="chatgpt | gemini  (required for get/rotate/reset)")
+    p.add_argument("--wrap", action="store_true",
+                   help="rotate: wrap to index 0 instead of raising NoMoreAccountsError")
     args = p.parse_args()
 
     try:
@@ -196,7 +208,7 @@ if __name__ == "__main__":
         elif args.cmd == "rotate":
             if not args.provider:
                 print("provider required (chatgpt|gemini)", file=_sys.stderr); _sys.exit(1)
-            print(_json.dumps(rotate(args.provider, REPO)))
+            print(_json.dumps(rotate(args.provider, REPO, wrap=args.wrap)))
         elif args.cmd == "reset":
             if not args.provider:
                 print("provider required (chatgpt|gemini)", file=_sys.stderr); _sys.exit(1)

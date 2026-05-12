@@ -72,7 +72,9 @@ const SAVER_RESTART_MS = envInt('CCA_SAVER_RESTART_MS', 3_000);
 // cheap saver-restart gets a chance first.
 const RESCUE_TIMEOUT_MS   = envInt('CCA_RESCUE_TIMEOUT_MS',   180_000);  // 3 min stall → rescue
 const RESCUE_COOLDOWN_MS  = envInt('CCA_RESCUE_COOLDOWN_MS',   60_000);  // gap between rescues
-const MAX_RESCUE_ATTEMPTS = envInt('CCA_MAX_RESCUE_ATTEMPTS',        5); // bail after N
+// v6.2: rescue is no longer bounded — pipeline must complete all images.
+// Set to a low value (e.g. 5) if you want the original bail-out safety net.
+const MAX_RESCUE_ATTEMPTS = envInt('CCA_MAX_RESCUE_ATTEMPTS', 999);
 const SKIP_INITIAL_SUBMIT = process.env.CCA_SKIP_INITIAL_SUBMIT === '1'; // test-only
 
 // Account-rotation thresholds (v6 phase 2). When save_images.cjs detects 1095 /
@@ -81,7 +83,11 @@ const SKIP_INITIAL_SUBMIT = process.env.CCA_SKIP_INITIAL_SUBMIT === '1'; // test
 const ROTATION_1095_THRESHOLD = envInt('CCA_ROTATION_1095_THRESHOLD', 3);    // ≥N distinct-tab 1095 alerts within window
 const ROTATION_WINDOW_MS      = envInt('CCA_ROTATION_WINDOW_MS', 120_000);   // alerts within last 2 min
 const ROTATION_COOLDOWN_MS    = envInt('CCA_ROTATION_COOLDOWN_MS', 60_000);  // min gap between rotations
-const MAX_ROTATIONS           = envInt('CCA_MAX_ROTATIONS', 5);              // bail after N — likely a real problem
+// v6.2: rotation is now wrap-around (see `python -m tools.accounts rotate --wrap`).
+// MAX_ROTATIONS is effectively unbounded so the pipeline never auto-quits on
+// rotation count alone. Set to a low value (e.g. 5) if you want the original
+// bail-after-N safety net back.
+const MAX_ROTATIONS           = envInt('CCA_MAX_ROTATIONS', 999);
 // Silent-blocker fallback: when detectBlocker() in save_images.cjs misses the
 // 1095 UI (tab still shows "Stop", language mismatch, banner under different DOM),
 // no alerts get written and the rotation path never fires. The orchestrator
@@ -328,11 +334,15 @@ async function triggerRescue() {
   }
 }
 
-// ─── Account rotation (v6 phase 2) ──────────────────────────────────────────
+// ─── Account rotation (v6 phase 2; v6.2: wrap-around) ───────────────────────
 // Rotation is triggered when save_images.cjs has recorded blocker alerts
 // (1095 / quota) sufficient to indicate the failure is account-level rather
 // than prompt-level. The current Gemini account is rotated to the next entry
-// in accounts.json; if exhausted, the orchestrator exits with code 4.
+// in accounts.json. v6.2: rotation is wrap-around — when the list is
+// exhausted the rotator cycles back to index 0 and keeps going, so the
+// pipeline never auto-quits on account exhaustion alone. The only hard
+// stops left are MAX_ROTATIONS (default 999) and MAX_RESCUE_ATTEMPTS
+// (default 999), both effectively unbounded.
 function readBlockerAlerts() { return readJsonOr(BLOCKER_ALERTS_FILE, []); }
 
 function shouldRotate() {
@@ -373,18 +383,21 @@ async function triggerRotation(reason) {
     killSave();
     await new Promise(r => setTimeout(r, 1500));
 
-    // 2. Advance the rotator pointer for Gemini
-    const rot = runShell(PYTHON, ['-m', 'tools.accounts', 'rotate', 'gemini']);
-    if (rot.code === 2) {
-      console.error(`${ts()} [ORCH] === GIVING UP ===  no more Gemini accounts in accounts.json (current rotation exhausted)`);
-      console.error(`${ts()} [ORCH]   add another entry to the gemini[] array and re-run.`);
-      killAll();
-      process.exit(4);
-    }
+    // 2. Advance the rotator pointer for Gemini (v6.2: wrap-around — when the
+    //    list is exhausted, the rotator returns to index 0 and keeps cycling).
+    const rot = runShell(PYTHON, ['-m', 'tools.accounts', 'rotate', 'gemini', '--wrap']);
     if (rot.code !== 0) {
-      console.error(`${ts()} [ORCH] rotation aborted — accounts.py rotate failed: ${rot.stderr.trim()}`);
-      killAll();
-      process.exit(5);
+      // With --wrap, exit-2 (NoMoreAccountsError) is impossible. Any non-zero
+      // here is a transient/unexpected failure — log and bail out of this
+      // rotation attempt, but DO NOT exit the orchestrator. The next stall
+      // will trigger another rotation attempt.
+      console.error(`${ts()} [ORCH] rotation skipped — accounts.py rotate failed (rc=${rot.code}): ${(rot.stderr || '').trim()}`);
+      console.error(`${ts()} [ORCH] will retry on next stall (pipeline continues — must complete all images)`);
+      // Respawn the children we just killed so progress can resume on the
+      // current account. The next stall-detector tick will try rotating again.
+      spawnSubmit();
+      scheduleSaveSpawn('post-rotation-skipped');
+      return;
     }
     let newAccount = {};
     try { newAccount = JSON.parse(rot.stdout); } catch (_) {}
@@ -393,9 +406,15 @@ async function triggerRotation(reason) {
     // 3. Sign out + sign in to the new account on the Gemini Chrome
     const login = runShell(PYTHON, ['auto_login.py', '--skip-chatgpt', '--force-resignin'], { stdio: 'inherit' });
     if (login.code !== 0) {
-      console.error(`${ts()} [ORCH] auto_login failed for new account (rc=${login.code}). Halting.`);
-      killAll();
-      process.exit(login.code === 1 ? 6 : 5);  // 6 = human verification needed; 5 = generic
+      // v6.2: do NOT exit on login failure — the pipeline must keep trying
+      // until all images are generated. Log the failure, respawn the workers,
+      // and let the next stall trigger another rotation (which will land on
+      // the next account thanks to wrap-around).
+      console.error(`${ts()} [ORCH] auto_login failed for new account (rc=${login.code}) — NOT halting (v6.2 no-quit policy)`);
+      console.error(`${ts()} [ORCH] respawning workers; next stall will retry rotation with the following account`);
+      spawnSubmit();
+      scheduleSaveSpawn('post-rotation-login-failed');
+      return;
     }
     console.log(`${ts()} [ORCH] new account signed in successfully`);
 

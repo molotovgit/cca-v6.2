@@ -133,7 +133,11 @@ function runChildExitCode(cmd, args, env = {}) {
 //   3. Caller retries the failed stage from the top.
 //
 // Returns 'ok' | 'exhausted' | 'login_failed'.
-const MAX_CHATGPT_ROTATIONS = envInt('CCA_MAX_CHATGPT_ROTATIONS', 5);
+// v6.2: rotation is wrap-around (see `python -m tools.accounts rotate --wrap`).
+// MAX_CHATGPT_ROTATIONS is effectively unbounded so the pipeline never auto-
+// quits on rate-limit retries alone. Set to a low value (e.g. 5) if you want
+// the original bail-after-N safety net back.
+const MAX_CHATGPT_ROTATIONS = envInt('CCA_MAX_CHATGPT_ROTATIONS', 999);
 
 function runShell(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { cwd: REPO, encoding: 'utf-8', ...opts });
@@ -142,14 +146,15 @@ function runShell(cmd, args, opts = {}) {
 
 async function rotateChatgpt() {
   log('CHATGPT-ROT', `attempting rotation (rate-limit detected on current account)`);
-  const rot = runShell(PYTHON, ['-m', 'tools.accounts', 'rotate', 'chatgpt']);
-  if (rot.code === 2) {
-    log('CHATGPT-ROT', `EXHAUSTED — no more chatgpt accounts in accounts.json`);
-    log('CHATGPT-ROT', `add another entry to chatgpt[] in accounts.json and re-run`);
-    return 'exhausted';
-  }
+  // v6.2: --wrap so the rotator cycles back to index 0 after the last account
+  // instead of raising NoMoreAccountsError. The pipeline must complete every
+  // image, so we keep rotating indefinitely.
+  const rot = runShell(PYTHON, ['-m', 'tools.accounts', 'rotate', 'chatgpt', '--wrap']);
   if (rot.code !== 0) {
-    log('CHATGPT-ROT', `accounts.py rotate failed: ${rot.stderr.trim()}`);
+    // With --wrap, exit 2 (NoMoreAccountsError) is impossible. Any other
+    // non-zero is an unexpected/transient failure — report it so the caller
+    // can decide whether to retry.
+    log('CHATGPT-ROT', `accounts.py rotate failed (rc=${rot.code}): ${(rot.stderr || '').trim()}`);
     return 'login_failed';
   }
   let newAccount = {};
@@ -190,9 +195,14 @@ async function runChatgptStage(stageName, pyScript, pyArgs, env = {}) {
       }
       const result = await rotateChatgpt();
       if (result !== 'ok') {
-        throw new Error(`${stageName} cannot rotate chatgpt account (${result}) — halting`);
+        // v6.2: a single failed rotation no longer halts the pipeline. Log it
+        // and let the loop try again on the next iteration — the next attempt
+        // will land on the next account thanks to wrap-around, so transient
+        // login failures (CAPTCHA, expired session, etc.) self-heal.
+        log(stageName, `rotation failed (${result}); continuing to next attempt (will land on next account)`);
+      } else {
+        log(stageName, `retrying after rotation`);
       }
-      log(stageName, `retrying after rotation`);
       continue;
     }
     throw new Error(`${pyScript} exited code=${rc} (non-rate-limit failure)`);
