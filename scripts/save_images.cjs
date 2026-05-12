@@ -152,12 +152,18 @@ async function exportToBuffer(page, src) {
 // click, then watches for a new entry (set-difference). Since the saver loop
 // processes one tab at a time, the only way another file could appear is an
 // external actor — extremely unlikely during a run.
+// Gemini delivers the full-size image as PNG sometimes and as JPEG (.jpg /
+// .jfif) other times — appears to depend on account / session / experiment.
+// Match every plausible image extension Chrome assigns when serving Gemini's
+// download. Bytes are always a valid image regardless of extension.
+const GEMINI_DL_RX = /^Gemini_Generated_Image.*\.(png|jpe?g|jfif|webp)$/i;
+
 function snapshotDownloads(dirs) {
   const seen = new Map();
   for (const d of dirs) {
     if (!fs.existsSync(d)) continue;
     for (const f of fs.readdirSync(d)) {
-      if (!/^Gemini_Generated_Image.*\.png$/i.test(f)) continue;
+      if (!GEMINI_DL_RX.test(f)) continue;
       seen.set(path.join(d, f), true);
     }
   }
@@ -334,26 +340,53 @@ async function clickAndCaptureDownload(page, watchDirs, timeoutMs = 20_000) {
         try {
           // v6.2: the in-chat <img> is a 1024x572 preview blob. Click the
           // "Download full size image" button instead — that delivers the
-          // native ~2752x1536 render Gemini actually generated.
+          // native ~2752x1536 render Gemini actually generated. Source file
+          // may arrive as .png, .jpg, or .jfif depending on Gemini's session;
+          // we always rename to .png so the rest of the pipeline (which
+          // filters by *.png) treats every image uniformly. The bytes inside
+          // are still a valid image — viewers, browsers, and Notion all
+          // sniff magic bytes rather than trusting the extension.
           const dlPath = await clickAndCaptureDownload(page, WATCH_DIRS, 20_000);
           const outFile = path.join(outDir, `${String(entry.idx).padStart(3, '0')}-${entry.slug}.png`);
           fs.renameSync(dlPath, outFile);  // atomic move; deletes the source
           const sz = fs.statSync(outFile).size;
-          // Best-effort dimension read from PNG IHDR (24-byte header)
+          // Best-effort dimension read — recognise PNG IHDR + JPEG SOF markers.
           let dims = '';
+          let kind = '?';
           try {
             const fd = fs.openSync(outFile, 'r');
-            const hdr = Buffer.alloc(24);
-            fs.readSync(fd, hdr, 0, 24, 0);
+            const hdr = Buffer.alloc(4096);
+            fs.readSync(fd, hdr, 0, 4096, 0);
             fs.closeSync(fd);
-            if (hdr.slice(1, 4).toString() === 'PNG') {
+            if (hdr[0] === 0x89 && hdr.slice(1, 4).toString() === 'PNG') {
+              kind = 'PNG';
               dims = `${hdr.readUInt32BE(16)}x${hdr.readUInt32BE(20)}`;
+            } else if (hdr[0] === 0xFF && hdr[1] === 0xD8 && hdr[2] === 0xFF) {
+              kind = 'JPEG';
+              let i = 2;
+              while (i < hdr.length - 8) {
+                if (hdr[i] === 0xFF) {
+                  const m = hdr[i + 1];
+                  const isSof = (m >= 0xC0 && m <= 0xC3) || (m >= 0xC5 && m <= 0xC7)
+                              || (m >= 0xC9 && m <= 0xCB) || (m >= 0xCD && m <= 0xCF);
+                  if (isSof) {
+                    const h = hdr.readUInt16BE(i + 5);
+                    const w = hdr.readUInt16BE(i + 7);
+                    dims = `${w}x${h}`;
+                    break;
+                  }
+                  const segLen = hdr.readUInt16BE(i + 2);
+                  i += 2 + segLen;
+                } else {
+                  i++;
+                }
+              }
             }
           } catch (_) {}
           savedIdxs.add(entry.idx);
           writeJson(SAVED_FILE, [...savedIdxs]);
           savedThisIter++;
-          console.log(`[save] ${String(entry.idx).padStart(3, '0')} ${entry.slug}  → ${dims || 'png'} ${(sz / 1024).toFixed(0)} KB`);
+          console.log(`[save] ${String(entry.idx).padStart(3, '0')} ${entry.slug}  → ${kind} ${dims || '?'} ${(sz / 1024).toFixed(0)} KB`);
 
           if (closeTabs) {
             try { await page.close(); } catch (_) {}
