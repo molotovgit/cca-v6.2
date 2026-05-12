@@ -111,6 +111,62 @@ function recordBlocker(idx, slug, type) {
   writeJson(BLOCKER_ALERTS_FILE, alerts);
 }
 
+// Orphan recovery: scan every Gemini conversation tab and return entries
+// for tabs that (a) are NOT in tab_map and (b) carry an image whose
+// "More options for <prompt>" aria-label matches a known prompt in
+// prompts.json that hasn't already been saved. These can arise when
+// submit_prompts.cjs is killed after sending a prompt but before writing
+// the tab_map entry (orchestrator restart, rotation, etc.), so the saver
+// would normally never iterate them.
+async function findOrphanTabs(browser, tabMap, prompts, savedIdxs) {
+  const orphans = [];
+  // Build a quick lookup: image_prompt body -> entry. Strip the resolution
+  // preamble we prepend at submit time so the comparison key matches the
+  // raw scene text Gemini echoes back in its "More options for ..." label.
+  const PREAMBLE_RX = /^4K UHD resolution[^,]*,\s*\d+x\d+,\s*16:9[^,]*,\s*ultra[^,]*,\s*ultra[^,]*,\s*highly[^,]*,\s*crisp[^,]*,\s*fine[^,]*,\s*professional[^,]*,\s*no blur,\s*no compression,\s*/i;
+  const promptIndex = new Map();
+  for (const p of prompts) {
+    if (savedIdxs.has(p.idx)) continue;
+    const key = (p.image_prompt || '').replace(/\s+/g, ' ').trim();
+    // Use the first 80 chars as the fingerprint to keep matches robust
+    // against minor whitespace/punctuation changes Gemini might apply.
+    if (key.length >= 30) promptIndex.set(key.slice(0, 80), p);
+  }
+  if (promptIndex.size === 0) return orphans;
+
+  for (const ctx of browser.browserContexts()) {
+    for (const page of await ctx.pages()) {
+      const url = (page.url() || '');
+      if (!/gemini\.google\.com\/app/.test(url)) continue;
+      let tid;
+      try { tid = page.target()._targetId; } catch (_) { continue; }
+      if (tabMap[tid]) continue;  // already tracked
+
+      // Pull the "More options for <prompt>" aria-label off the page. If
+      // there are multiple, pick the longest (the user-message variant is
+      // typically the longest because it contains the full preamble+scene).
+      const promptText = await page.evaluate(() => {
+        const labels = Array.from(document.querySelectorAll('button,[role=button]'))
+          .map(b => (b.getAttribute('aria-label') || '').trim())
+          .filter(l => /^more options for /i.test(l))
+          .map(l => l.replace(/^more options for /i, '').trim());
+        if (!labels.length) return '';
+        labels.sort((a, b) => b.length - a.length);
+        return labels[0];
+      }).catch(() => '');
+      if (!promptText) continue;
+
+      const stripped = promptText.replace(PREAMBLE_RX, '').replace(/\s+/g, ' ').trim();
+      const probe = stripped.slice(0, 80);
+      const match = promptIndex.get(probe);
+      if (match) {
+        orphans.push({ page, tid, entry: { idx: match.idx, slug: match.slug } });
+      }
+    }
+  }
+  return orphans;
+}
+
 async function isStillGenerating(page) {
   return page.evaluate(() =>
     Array.from(document.querySelectorAll('button, [role=button]'))
@@ -353,6 +409,25 @@ async function clickAndCaptureDownload(page, watchDirs, timeoutMs = 20_000) {
         .map(([tid]) => tid)
     );
 
+    // Pre-pass: discover orphan tabs (image rendered but no tab_map entry)
+    // and SYNTHESISE tab_map rows for them, so the main scan below treats
+    // them identically to normal tabs.
+    let orphansSeen = 0;
+    try {
+      const orphans = await findOrphanTabs(browser, tabMap, prompts, savedIdxs);
+      if (orphans.length) {
+        for (const o of orphans) {
+          tabMap[o.tid] = { ...o.entry, prompts_path: path.resolve(promptsPath), submitted_at: '', recovered: true };
+          wantedTids.add(o.tid);
+          orphansSeen++;
+        }
+        writeJson(TAB_MAP_FILE, tabMap);
+        console.log(`[save] iter ${iter}: recovered ${orphansSeen} orphan tab(s) into tab_map (idx ${orphans.map(o => o.entry.idx).join(',')})`);
+      }
+    } catch (e) {
+      console.log(`[save] orphan scan error: ${e.message}`);
+    }
+
     let scanned = 0, savedThisIter = 0;
     for (const ctx of browser.browserContexts()) {
       for (const page of await ctx.pages()) {
@@ -388,10 +463,15 @@ async function clickAndCaptureDownload(page, watchDirs, timeoutMs = 20_000) {
         } catch (_) {}
         await sleep(200);
 
-        if (await isStillGenerating(page)) continue;
-
+        // Image-first check: Gemini's "Stop" button sometimes stays mounted
+        // even after the image is fully rendered (known UI quirk). The OLD
+        // logic of `if (isStillGenerating) continue` would then skip the tab
+        // forever even though the image was sitting right there ready to
+        // capture. Now: look for the image first, and ONLY treat "Stop button
+        // present" as a reason to skip if there's no image yet.
         const found = await findNewImageOnTab(page);
         if (!found) {
+          if (await isStillGenerating(page)) continue;
           // Tab is no longer generating AND has no image — check for known blockers
           // (1095 content-policy / daily-quota). If detected, record an alert so the
           // orchestrator can decide to rotate accounts; close the tab so the queue
