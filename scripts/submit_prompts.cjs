@@ -26,11 +26,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // produce the highest-fidelity render it can within its canvas, and
 // (b) it locks the 16:9 aspect ratio Gemini supports.
 // Override with CCA_PROMPT_PREAMBLE env var if needed.
-const PROMPT_PREAMBLE = process.env.CCA_PROMPT_PREAMBLE || (
-  '4K UHD resolution, 2560x1440, 16:9 widescreen aspect ratio, ultra high definition, ' +
-  'ultra sharp, highly detailed, crisp edges, fine detail, professional editorial quality, ' +
-  'no blur, no compression, '
-);
+const PROMPT_PREAMBLE = process.env.CCA_PROMPT_PREAMBLE || '';
 
 const REPO     = path.resolve(__dirname, '..');
 const STATE_DIR = path.join(REPO, '.cca');
