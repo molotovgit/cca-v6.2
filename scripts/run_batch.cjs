@@ -168,7 +168,7 @@ function runChapter(lesson) {
     console.error(`\n  ✗ ${e.message}\n`);
     if (e.helpful) {
       console.error(`  Create lessons.txt at the repo root with one chapter per line.`);
-      console.error(`  See lessons.txt.example for the format.\n`);
+      console.error(`  See examples/lessons.txt.example for the format.\n`);
     }
     process.exit(2);
   }
@@ -177,7 +177,7 @@ function runChapter(lesson) {
   if (lessons.length === 0) {
     console.error(`\n  ✗ no parseable lessons in ${LESSONS_PATH}`);
     console.error(`  Add at least one row in the format: grade,lang,subject,chapter`);
-    console.error(`  See lessons.txt.example for details.\n`);
+    console.error(`  See examples/lessons.txt.example for details.\n`);
     process.exit(2);
   }
 
