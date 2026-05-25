@@ -27,7 +27,9 @@ function isPlainObject(value) {
 }
 
 function resolvePathForStorage(inputPath) {
-  const abs = path.resolve(inputPath);
+  const abs = path.isAbsolute(inputPath)
+    ? inputPath
+    : path.join(REPO_ROOT, inputPath);
   const rel = path.relative(REPO_ROOT, abs);
   if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
     return rel;

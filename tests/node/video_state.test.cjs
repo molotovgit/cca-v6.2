@@ -10,6 +10,7 @@ const {
   DEFAULT_MIN_VIDEO_BYTES,
   readVideoStateFile,
   reconcileVideoState,
+  resolvePathForStorage,
 } = require('../../src/node/video/video_state.cjs');
 
 function makeTempDir() {
@@ -29,6 +30,17 @@ test('readVideoStateFile returns null for missing or corrupt files', () => {
 
   assert.equal(readVideoStateFile(missingPath), null);
   assert.equal(readVideoStateFile(corruptPath), null);
+});
+
+test('resolvePathForStorage treats repo-relative paths consistently across cwd', () => {
+  const originalCwd = process.cwd();
+  const tmp = makeTempDir();
+  try {
+    process.chdir(tmp);
+    assert.equal(resolvePathForStorage('data/prompts/example.json'), path.join('data', 'prompts', 'example.json'));
+  } finally {
+    process.chdir(originalCwd);
+  }
 });
 
 test('reconcileVideoState rebuilds item state from disk and writes atomically', () => {
