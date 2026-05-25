@@ -3,6 +3,7 @@
 | Doc | When to read |
 |---|---|
 | [core/ARCHITECTURE.md](core/ARCHITECTURE.md) | Understand the pipeline end-to-end. Where each stage lives, how state files work, the Chrome/CDP topology, the dashboard. |
+| [core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md](core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md) | Flow-first plan for implementing reliable video generation with state, retries, blockers, and MP4 export. |
 | [user/QUICKSTART.md](user/QUICKSTART.md) | First single-host run, 5-minute version. |
 | [user/SETUP.md](user/SETUP.md) | Detailed first install on one machine. |
 | [ops/DEPLOYMENT.md](ops/DEPLOYMENT.md) | Multi-host operating manual (MeshCentral + schtasks). |

@@ -18,6 +18,13 @@ Welcome to the **Creative Content Automation** project. This Obsidian vault prov
 - [[docs/ops/DEPLOYMENT|Deployment Guide]] — Multi-host scaling with MeshCentral.
 - [[docs/ops/TROUBLESHOOTING|Troubleshooting]] — Common issues and fixes.
 
+### 🧠 Workspace Memory
+- [[MEMORY_INDEX|Memory Index]] — Start here for current context and issue priority.
+- [[MASTER_MEMORY|Master Memory]] — Durable project operating memory.
+- [[ROADMAP|Roadmap]] — Phased stabilization plan.
+- [[WISHLIST|Wishlist]] — Backlog ideas and follow-ons.
+- [[docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN|Flow Video Plan]] — Implementation-ready Flow-first video plan.
+
 ---
 
 ## 📁 Repository Structure
