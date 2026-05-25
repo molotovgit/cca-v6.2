@@ -49,6 +49,7 @@ _*.png
 _*.cjs
 _*.ps1
 _*.py
+!__init__.py
 _*.txt
 _*.bat
 _*.log
