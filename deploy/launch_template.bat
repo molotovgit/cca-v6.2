@@ -60,7 +60,7 @@ if not defined CHATGPT_PASSWORD (echo ERROR: CHATGPT_PASSWORD not set & exit /b 
 if not defined GEMINI_EMAIL     (echo ERROR: GEMINI_EMAIL not set & exit /b 2)
 if not defined GEMINI_PASSWORD  (echo ERROR: GEMINI_PASSWORD not set & exit /b 2)
 
-if not exist "scripts\run_pipeline.cjs" (echo ERROR: scripts\run_pipeline.cjs not found. & exit /b 1)
+if not exist "src\node\orchestrators\run_pipeline.cjs" (echo ERROR: src\node\orchestrators\run_pipeline.cjs not found. & exit /b 1)
 
 REM --- Pull latest (non-fatal) ---
 where git >nul 2>nul
@@ -118,9 +118,9 @@ where node >nul 2>nul   || (echo ERROR Node missing.   & exit /b 1)
 where python >nul 2>nul || (echo ERROR Python missing. & exit /b 1)
 
 REM --- Reset rotators ---
-python -m tools.accounts reset chatgpt 2>nul
-python -m tools.accounts reset gemini 2>nul
-python -m tools.accounts status
+python -m src.python.auth.accounts reset chatgpt 2>nul
+python -m src.python.auth.accounts reset gemini 2>nul
+python -m src.python.auth.accounts status
 
 REM --- Install deps ---
 set PUPPETEER_SKIP_DOWNLOAD=true
@@ -134,18 +134,18 @@ if errorlevel 1 (
 python -m pip install -q -r requirements.txt
 
 REM --- Chrome ---
-node scripts\setup_chrome.cjs || (echo ERROR setup_chrome failed. & exit /b 1)
+node src\node\setup\setup_chrome.cjs || (echo ERROR setup_chrome failed. & exit /b 1)
 
 REM --- Dashboard (background) ---
 for /f "tokens=2 delims=:" %%i in ('ipconfig ^| findstr /R /C:"IPv4.*192\.168\."') do set "MY_IP=%%i"
 set "MY_IP=%MY_IP: =%"
-start "CCA Dashboard" cmd /k "node scripts\dashboard.cjs"
+start "CCA Dashboard" cmd /k "node src\node\dashboard\dashboard.cjs"
 timeout /t 3 /nobreak >nul
 echo Dashboard URL: http://%MY_IP%:7777   (or http://localhost:7777 from this host)
 start "" "http://localhost:7777"
 
 REM --- Auto-login (60s grace if it fails) ---
-python auto_login.py
+python src\python\auth\auto_login.py
 set AL_RC=%errorlevel%
 if not "%AL_RC%"=="0" (
   echo Auto-login rc=%AL_RC% - waiting 60s for manual sign-in
@@ -170,7 +170,7 @@ for %%C in (%CCA_CHAPTERS%) do (
   echo #  CHAPTER %%C  : G%CCA_GRADE% / %CCA_SUBJECT% / ch %%C
   echo ###############################################################
   set CCA_CHAPTER=%%C
-  node scripts\run_pipeline.cjs <nul
+  node src\node\orchestrators\run_pipeline.cjs <nul
   set LAST_RC=!errorlevel!
   echo Chapter %%C finished. Exit code: !LAST_RC!
 )
@@ -179,7 +179,7 @@ echo.
 echo ============================================================
 echo   BATCH SUMMARY  (chapters: %CCA_CHAPTERS%)
 echo ============================================================
-python -m tools.accounts status
+python -m src.python.auth.accounts status
 echo   Dashboard: http://%MY_IP%:7777
 echo   Last chapter exit code: %LAST_RC%
 echo ============================================================
