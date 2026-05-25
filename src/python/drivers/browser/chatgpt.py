@@ -460,28 +460,43 @@ def login_via_google(page: Page, email: str, password: str,
             time.sleep(0.5)
         print(f"[login] after auth-login redirect, host = {_host_of(page.url)}")
 
-    # ── Step 0.5: On chatgpt.com/auth/login the actual auth form is hidden
-    # behind a "Log in" CTA (testid='login-button'). Click it first.
+    # ── Step 0.5: On chatgpt.com homepage the auth form is hidden behind a
+    # "Log in" CTA (testid='login-button'). On chatgpt.com/auth/login (current
+    # default behavior, since late 2025) the form is rendered directly with no
+    # "Log in" CTA — "Continue with Google" is already visible. Detect which
+    # state we're in: if Continue-with-Google is already on the page, skip the
+    # CTA click entirely. Otherwise try to click "Log in" (don't raise if
+    # missing — Step 1 will report a clearer error if Google CTA also can't
+    # be found).
     host = _host_of(page.url)
-    if host.endswith("chatgpt.com"):
-        print("[login] clicking 'Log in' CTA on chatgpt.com")
+    path = urlparse(page.url).path or "/"
+    on_auth_page = "/auth/" in path  # /auth/login, /auth/signup, etc.
+    google_already_visible = _find_one(page, [
+        ("text", re.compile(r"Continue with Google", re.I)),
+        ("aria", re.compile(r"Continue with Google", re.I)),
+    ], timeout_ms=2000) is not None
+    if host.endswith("chatgpt.com") and not google_already_visible and not on_auth_page:
+        print("[login] clicking 'Log in' CTA on chatgpt.com homepage")
         if not _click_first_visible(page, [
             ("data", "login-button"),
             ("aria", re.compile(r"^Log in$", re.I)),
             ("text", re.compile(r"^Log in$", re.I)),
-        ], timeout_ms=15000):
-            raise RuntimeError(f"login: 'Log in' button not found on {page.url}")
-        # After click, page navigates to auth.openai.com or shows next step.
-        wait_end = time.time() + 15
-        while time.time() < wait_end:
-            new_host = _host_of(page.url)
-            if new_host.endswith("openai.com") and not new_host.endswith("chatgpt.com"):
-                break
-            if new_host.endswith("google.com"):
-                break
-            time.sleep(0.5)
-        time.sleep(2.0)
-        print(f"[login] after Log-in click, host = {_host_of(page.url)}")
+        ], timeout_ms=10000):
+            print("[login] 'Log in' CTA not found — proceeding to look for Continue-with-Google directly")
+        else:
+            # After click, page navigates to auth.openai.com or shows next step.
+            wait_end = time.time() + 15
+            while time.time() < wait_end:
+                new_host = _host_of(page.url)
+                if new_host.endswith("openai.com") and not new_host.endswith("chatgpt.com"):
+                    break
+                if new_host.endswith("google.com"):
+                    break
+                time.sleep(0.5)
+            time.sleep(2.0)
+            print(f"[login] after Log-in click, host = {_host_of(page.url)}")
+    elif google_already_visible:
+        print("[login] 'Continue with Google' already visible — skipping Log-in CTA")
 
     # ── Step 1: Click Continue with Google (if not already on Google) ──
     host = _host_of(page.url)

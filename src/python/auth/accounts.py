@@ -188,7 +188,10 @@ if __name__ == "__main__":
     import json as _json
     import sys as _sys
 
-    REPO = Path(__file__).resolve().parent.parent.parent
+    # accounts.py lives at src/python/auth/accounts.py — repo root is 4 parents up
+    # (auth → python → src → cca-v6.2). Pre-reorg, the file was at tools/accounts.py
+    # so 2 parents was correct; the reorg changed depth but the constant wasn't updated.
+    REPO = Path(__file__).resolve().parent.parent.parent.parent
     _sys.path.insert(0, str(REPO / "src" / "python"))
 
     p = argparse.ArgumentParser(prog="python -m tools.accounts")

@@ -35,7 +35,7 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
 
-REPO = Path(__file__).resolve().parent.parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent.parent  # src/python/utils/ → cca-v6.2
 sys.path.insert(0, str(REPO / "src" / "python"))
 
 try:

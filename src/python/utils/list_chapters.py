@@ -8,7 +8,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-REPO = Path(__file__).resolve().parent.parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent.parent  # src/python/utils/list_chapters.py → cca-v6.2
 load_dotenv(REPO / ".env")
 sys.path.insert(0, str(REPO / "src" / "python"))
 

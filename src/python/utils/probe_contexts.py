@@ -8,7 +8,7 @@ from pathlib import Path
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-REPO = Path(__file__).resolve().parent.parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent.parent  # src/python/utils/ → cca-v6.2
 load_dotenv(REPO / ".env")
 CDP_PORT = int(os.environ.get("GEMINI_CDP_PORT", "9223"))
 
