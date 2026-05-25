@@ -86,10 +86,18 @@ async function submitPromptOnTab(page, promptText) {
   const prompt = PROMPT_PREAMBLE + rawPrompt;
 
   const promptHandle = await page.evaluateHandle(() => {
+    // Multi-language: matches "Enter a prompt for Gemini" (en),
+    // "Введите запрос для Gemini" (ru), and Uzbek/other variants ending in "Gemini".
     const eds = Array.from(document.querySelectorAll('[contenteditable=true]'));
-    return eds.find(el => /Enter a prompt for Gemini/i.test(
-      el.getAttribute('aria-label') || el.getAttribute('placeholder') || ''
-    )) || eds[0] || null;
+    const labelMatch = (el) => {
+      const lbl = (el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim();
+      return /Enter a prompt for Gemini|Введите запрос для Gemini|prompt.*Gemini|Gemini.*so.?rang|Geminidan/i.test(lbl);
+    };
+    return eds.find(labelMatch) || eds.find(el => {
+      // fallback: largest visible contenteditable
+      const r = el.getBoundingClientRect();
+      return r.width > 200 && r.height > 30;
+    }) || eds[0] || null;
   });
   const el = promptHandle.asElement();
   if (!el) throw new Error('prompt input not found');
@@ -99,10 +107,21 @@ async function submitPromptOnTab(page, promptText) {
   await sleep(400);
 
   const sendBox = await page.evaluate(() => {
-    const btn = Array.from(document.querySelectorAll('button, [role=button]'))
-      .find(b => /^Send message$/i.test(b.getAttribute('aria-label') || ''));
+    // Multi-language send button: "Send message" (en), "Отправить сообщение" (ru),
+    // "Yuborish" (uz). Fallback: any button with aria containing send/submit/отправ/yubor.
+    const btns = Array.from(document.querySelectorAll('button, [role=button]'));
+    const exact = btns.find(b => {
+      const a = (b.getAttribute('aria-label') || '').trim();
+      return /^(Send message|Отправить сообщение|Yuborish|Submit)$/i.test(a);
+    });
+    const fuzzy = exact || btns.find(b => {
+      const a = (b.getAttribute('aria-label') || '').toLowerCase();
+      return a && (a.includes('send message') || a.includes('отправить сообщ') || a.includes('yubor') || /^send$|^submit$/.test(a));
+    });
+    const btn = fuzzy;
     if (!btn) return null;
     const r = btn.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return null;
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
   });
   if (!sendBox) throw new Error('Send message button not found');
