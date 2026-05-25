@@ -139,6 +139,35 @@ function runChildExitCode(cmd, args, env = {}) {
 // the original bail-after-N safety net back.
 const MAX_CHATGPT_ROTATIONS = envInt('CCA_MAX_CHATGPT_ROTATIONS', 999);
 
+// ────────────────────────── ChatGPT spinner (proactive) ─────────────────────
+// chatgpt_monitor.cjs writes alerts to .cca/chatgpt_alerts.json when it spots
+// account-level blockers on the ChatGPT chrome (port 9222). We check those
+// alerts BEFORE running a REFINE/PROMPTS stage and rotate pre-emptively, so
+// the stage doesn't waste a 6-min deadline on a known-dead account.
+// Mirrors the Gemini pattern in run_autonomous.cjs (shouldRotate + alert window).
+const CHATGPT_ALERTS_FILE        = path.join(REPO, '.cca', 'chatgpt_alerts.json');
+const CHATGPT_ROTATION_THRESHOLD = envInt('CCA_CHATGPT_ROTATION_THRESHOLD', 3);
+const CHATGPT_ROTATION_WINDOW_MS = envInt('CCA_CHATGPT_ROTATION_WINDOW_MS', 120_000);
+function readChatgptAlerts() {
+  try { return JSON.parse(fs.readFileSync(CHATGPT_ALERTS_FILE, 'utf-8')) || []; }
+  catch (_) { return []; }
+}
+// Returns rotation reason ('quota' | 'session_expired' | 'rate_limit') if recent
+// alerts warrant a pre-emptive rotation, else null. Mirrors Gemini's shouldRotate().
+function shouldRotateChatgpt() {
+  const now = Date.now();
+  const recent = readChatgptAlerts().filter(a => (now - a.t) < CHATGPT_ROTATION_WINDOW_MS);
+  if (recent.length === 0) return null;
+  if (recent.some(a => a.type === 'quota'))           return 'quota';
+  if (recent.some(a => a.type === 'session_expired')) return 'session_expired';
+  const uniqRL = new Set(recent.filter(a => a.type === 'rate_limit').map(a => a.idx));
+  if (uniqRL.size >= CHATGPT_ROTATION_THRESHOLD) return 'rate_limit';
+  return null;
+}
+function clearChatgptAlerts() {
+  try { fs.unlinkSync(CHATGPT_ALERTS_FILE); } catch (_) {}
+}
+
 function runShell(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { cwd: REPO, encoding: 'utf-8', ...opts });
   return { code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
@@ -186,6 +215,18 @@ async function rotateChatgpt() {
 // `stageName` is just for logging.
 async function runChatgptStage(stageName, pyScript, pyArgs, env = {}) {
   for (let attempt = 0; attempt <= MAX_CHATGPT_ROTATIONS; attempt++) {
+    // PROACTIVE rotation: before running the stage, check chatgpt_monitor's
+    // alerts. If the current account is known-blocked, rotate first so we
+    // don't waste this attempt on the 6-min deadline. Reactive exit-50 path
+    // (below) stays as a fallback for the cases the monitor missed.
+    const preReason = shouldRotateChatgpt();
+    if (preReason) {
+      log(stageName, `proactive rotation — chatgpt_monitor reports ${preReason}`);
+      const r = await rotateChatgpt();
+      clearChatgptAlerts();
+      if (r !== 'ok') log(stageName, `proactive rotation failed (${r}); attempting stage anyway`);
+    }
+
     const rc = await runChildExitCode(PYTHON, [pyScript, ...pyArgs], env);
     if (rc === 0) return;
     if (rc === 50) {

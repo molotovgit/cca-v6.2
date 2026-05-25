@@ -152,6 +152,17 @@ if not "%AL_RC%"=="0" (
   timeout /t 60 /nobreak >nul
 )
 
+REM --- ChatGPT account spinner (background, opt-in via CCA_ENABLE_CHATGPT_SPINNER=1) ---
+REM Mirrors the Gemini autonomous rotation pattern: a long-running watcher polls
+REM the ChatGPT chrome (:9222) for account-level blockers (quota / rate-limit /
+REM session-expired) and writes alerts to .cca/chatgpt_alerts.json. The
+REM orchestrator (run_pipeline.cjs) rotates pre-emptively before the next
+REM REFINE/PROMPTS stage when alerts warrant it.
+if /I "%CCA_ENABLE_CHATGPT_SPINNER%"=="1" (
+  start "CCA ChatGPT Spinner" cmd /k "node src\node\workers\chatgpt_monitor.cjs --watch"
+  echo ChatGPT spinner started in background.
+)
+
 REM --- Pipeline loop ---
 set CCA_GRADE=%CCA_GRADE%
 set CCA_LANG=%CCA_LANG%
