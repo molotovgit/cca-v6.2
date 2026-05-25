@@ -170,11 +170,11 @@ def main() -> None:
     print(f"[upload] chapter: '{chapter_title}'  id={chapter_id}  base={base}")
 
     subj_slug  = slugify(args.subject)
-    images_dir = REPO / "data" / "images" / f"g{args.grade}-{lang}" / subj_slug / base
+    images_dir = REPO / "data" / "images" / f"g{args.grade}-{args.lang}" / subj_slug / base
     if not images_dir.exists():
         raise SystemExit(f"[upload] images dir missing: {images_dir} — run IMAGES first.")
 
-    refined_md = REPO / "data" / "refined" / f"g{args.grade}-{lang}" / subj_slug / f"{base}.md"
+    refined_md = REPO / "data" / "refined" / f"g{args.grade}-{args.lang}" / subj_slug / f"{base}.md"
     if not refined_md.exists():
         raise SystemExit(f"[upload] refined chapter missing: {refined_md} — run REFINE first.")
 
@@ -183,7 +183,7 @@ def main() -> None:
     # CCA_ZIP_PREFIX=new_ and this run produces "new_ch01-...zip" while leaving
     # the existing "ch01-...zip" attachment in Notion alone.
     zip_prefix = os.environ.get("CCA_ZIP_PREFIX", "")
-    out_zip    = REPO / "data" / "zips"   / f"g{args.grade}-{lang}" / subj_slug / f"{zip_prefix}{base}.zip"
+    out_zip    = REPO / "data" / "zips"   / f"g{args.grade}-{args.lang}" / subj_slug / f"{zip_prefix}{base}.zip"
     out_marker = out_zip.with_suffix(".uploaded.json")
 
 
