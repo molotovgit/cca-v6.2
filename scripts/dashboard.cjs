@@ -978,7 +978,7 @@ const server = http.createServer((req, res) => {
   res.end('not found');
 });
 
-server.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('  CCA v5 LIVE BOARD');
   console.log('═══════════════════════════════════════════════════════════════');
