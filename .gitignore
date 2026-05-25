@@ -2,9 +2,12 @@
 .env
 accounts.json
 lessons.txt
-# Per-machine launch wrappers (may embed credentials)
+# Per-machine launch wrappers (may embed credentials).
+# The credential-free template at deploy/launch_template.bat IS tracked
+# (see allowlist below).
 launch.bat
 launch_*.bat
+!deploy/launch_template.bat
 # Local diagnostic / one-off test scripts
 test_*.py
 
@@ -36,6 +39,20 @@ chrome-gemini-cdp/
 
 # Local pipeline run logs
 logs/
+reports/
+
+# Diagnostic / probe artifacts (screenshots, ad-hoc scripts)
+_*.png
+_*.cjs
+_*.ps1
+_*.py
+_*.txt
+_*.bat
+_*.log
+
+# Per-host wrapper bat created by deploy/launch_template.bat caller
+wrapper.bat
+wrapper_*.bat
 
 # Node deps
 node_modules/

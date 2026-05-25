@@ -41,7 +41,7 @@ def _state_path(repo_root: Path) -> Path:
 def load_accounts(repo_root: Path) -> dict:
     p = _accounts_path(repo_root)
     if not p.exists():
-        raise AccountsFileMissingError(f"{p} not found — run from accounts.json.example or fill in credentials")
+        raise AccountsFileMissingError(f"{p} not found — copy examples/accounts.json.example to accounts.json and fill in credentials")
     raw = json.loads(p.read_text(encoding="utf-8"))
     out = {}
     for provider in ("chatgpt", "gemini"):
