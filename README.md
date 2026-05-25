@@ -4,6 +4,11 @@ A 5-stage pipeline that turns a textbook chapter on Notion into 80 illustrated
 prompts, generates images via Google Gemini, and uploads the result back to
 the chapter's Notion page. Designed to run unattended across many hosts.
 
+Video automation is being rebuilt as a Flow-first path. The current codebase has
+a one-clip Flow smoke worker and supporting state/error/download modules, but
+the live Flow UI smoke run still needs to be executed and tuned before batch
+video production is considered ready.
+
 ```
 FETCH ─→ REFINE ─→ PROMPTS ─→ IMAGES ─→ UPLOAD
 Notion   ChatGPT    ChatGPT    Gemini    Notion (zip + refined .md)
@@ -27,6 +32,7 @@ recent log lines.
 | **Deploy across many hosts** | [docs/ops/DEPLOYMENT.md](docs/ops/DEPLOYMENT.md) · [deploy/README.md](deploy/README.md) |
 | **Debug something that broke** | [docs/ops/TROUBLESHOOTING.md](docs/ops/TROUBLESHOOTING.md) |
 | **Look up a specific command** | [docs/user/RUN.md](docs/user/RUN.md) |
+| **Understand video automation status** | [docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md](docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md) |
 | **Hand the codebase to an AI agent** | [docs/core/CLAUDE.md](docs/core/CLAUDE.md) · [docs/core/PROMPT_FOR_CLAUDE.md](docs/core/PROMPT_FOR_CLAUDE.md) |
 | **See what changed** | [CHANGELOG.md](CHANGELOG.md) |
 

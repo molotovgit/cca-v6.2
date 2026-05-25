@@ -19,6 +19,12 @@ headful Chrome session, downloads each JPEG, zips them, and uploads the bundle
 back to the chapter's Notion page. A live dashboard at `:7777` reports
 progress. Multiple accounts rotate automatically as quotas exhaust.
 
+Video is a separate stabilization track. The repo now contains a Flow-first
+one-clip smoke path (`src/node/workers/submit_flow_videos.cjs` plus
+`src/node/video/*` helpers), but it is not wired into the default 5-stage image
+pipeline and still needs live Flow UI tuning before sequential or batch video
+runs.
+
 ---
 
 ## 2. The 5-stage pipeline
@@ -111,6 +117,30 @@ Skip condition: `data/images/.../ch{nn}/` already has 80 files.
 5. Write `data/zips/.../{prefix}ch{nn}-{title-slug}.uploaded.json` as the idempotency marker.
 
 Skip condition: `.uploaded.json` marker present and references a still-valid Notion file.
+
+### Experimental video smoke path — Flow / Veo
+
+**Status**: code-complete for one-clip smoke testing; live Flow validation still pending.
+
+The video path is intentionally separate from the image pipeline until it is
+observable and resumable in production. It uses:
+
+| Module | Role |
+|---|---|
+| `src/node/video/video_state.cjs` | Atomic `data/.cca/video_state.json` read/write and prompt/image/video reconciliation. |
+| `src/node/video/video_errors.cjs` | Visible-page blocker classification for quota, subscription, policy, failed render, and login/session states. |
+| `src/node/video/video_download.cjs` | Provider-neutral MP4 download helper for `data:`, `blob:`, and authenticated HTTP(S) sources. |
+| `src/node/video/flow_adapter.cjs` | One-clip Flow adapter skeleton: open Flow/project, upload start frame, enter motion prompt, submit, classify blockers, save MP4. |
+| `src/node/workers/submit_flow_videos.cjs` | Smoke CLI for one item with `--limit 1 --max-in-flight 1`. |
+
+Smoke command:
+
+```bash
+node src/node/workers/submit_flow_videos.cjs <prompts.json> --limit 1 --max-in-flight 1
+```
+
+Do not raise concurrency above 1 until a live smoke run succeeds and failed-tile
+behavior is measured.
 
 ---
 

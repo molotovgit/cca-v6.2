@@ -10,7 +10,7 @@ Welcome to the **Creative Content Automation** project. This Obsidian vault prov
 - [[docs/user/RUN|Execution Guide]] — How to run the pipeline and batch jobs.
 
 ### 🏗️ Core Architecture
-- [[docs/core/ARCHITECTURE|System Architecture]] — Deep dive into the 5-stage pipeline.
+- [[docs/core/ARCHITECTURE|System Architecture]] — Deep dive into the 5-stage image pipeline and experimental Flow video smoke path.
 - [[docs/core/CLAUDE|Claude/AI Orientation]] — Essential reading for AI assistants.
 - [[docs/user/GUIDE|User Guide]] — Detailed functional overview.
 

@@ -146,6 +146,37 @@ After all chapters complete, the terminal prints a per-lesson pass/fail summary.
 
 ---
 
+## Experimental video smoke run
+
+Video generation is not part of the default 5-stage run yet. The current
+Flow-first implementation is a one-clip smoke path for validating Flow / Veo UI
+automation before batch video work.
+
+After a chapter has prompts and source images, run one clip with:
+
+```bash
+node src/node/workers/submit_flow_videos.cjs <prompts.json> --limit 1 --max-in-flight 1
+```
+
+Example:
+
+```bash
+node src/node/workers/submit_flow_videos.cjs data/prompts/g7-uz/jahon-tarixi/ch11-title.json --limit 1 --max-in-flight 1
+```
+
+What it does:
+
+- Reconciles `data/.cca/video_state.json`.
+- Selects one retryable item with an existing source PNG.
+- Opens Flow at `https://labs.google/fx/tools/flow`.
+- Uploads the start frame, enters the motion prompt, submits, waits, and tries to save an MP4 under `data/videos/...`.
+- Records explicit item state for saved, timeout, quota/subscription, policy, UI, download, and missing-asset failures.
+
+Keep `--max-in-flight 1` during smoke validation. The selectors and exact Flow
+blocker text still need live UI tuning.
+
+---
+
 ## Output locations
 
 For each successful chapter, files land in:
