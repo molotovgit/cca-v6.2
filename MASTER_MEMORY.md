@@ -55,6 +55,7 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 
 ## Implementation Log
 - 2026-05-26: Started Phase 0 implementation. Work is split into recoverable slices: video state helpers, submitter failure exits, saver idle timeout, and focused Node tests. Sub-agents should work in isolated worktrees and avoid image pipeline changes.
+- 2026-05-26: Phase 0 submitter checkpoint complete. `src/node/workers/submit_videos.cjs` now maps preflight, missing-source, and generic submission failures to non-zero exit codes, with `src/node/workers/submit_videos_exit.test.cjs` covering the mapping.
 
 ## Index Links
 - [MEMORY_INDEX.md](MEMORY_INDEX.md)

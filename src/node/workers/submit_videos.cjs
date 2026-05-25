@@ -13,7 +13,6 @@
 //   node scripts/submit_videos.cjs <prompts.json> 1 5 15      # skip 1, do 5, max_open=15
 
 'use strict';
-const puppeteer = require('puppeteer');
 const path      = require('path');
 const fs        = require('fs');
 
@@ -37,6 +36,20 @@ function writeJson(file, data) {
   fs.renameSync(tmp, file);
 }
 function targetIdOf(page) { return page.target()._targetId; }
+
+const EXIT = {
+  ok: 0,
+  generic: 1,
+  preflight: 2,
+  missingSource: 7,
+};
+
+function determineExitCode({ errors, missingSourceErrors, preflightError = false }) {
+  if (preflightError) return EXIT.preflight;
+  if (!errors) return EXIT.ok;
+  if (missingSourceErrors && errors === missingSourceErrors) return EXIT.missingSource;
+  return EXIT.generic;
+}
 
 function deriveImagesDir(promptsJsonPath) {
   const abs = path.resolve(promptsJsonPath);
@@ -174,116 +187,147 @@ async function clickSend(page) {
   await page.mouse.click(sendBox.x, sendBox.y, { delay: 30 });
 }
 
-(async () => {
+async function main() {
   const promptsPath = process.argv[2];
   if (!promptsPath) {
     console.error('Usage: node submit_videos.cjs <prompts.json> [skip] [limit] [max_open]');
-    process.exit(1);
+    return EXIT.preflight;
   }
+  const puppeteer = require('puppeteer');
   const skip = parseInt(process.argv[3] || '0', 10) || 0;
   const limitArg = process.argv[4];
   const maxOpen = parseInt(process.argv[5] || '15', 10) || 15;
-  const prompts = JSON.parse(fs.readFileSync(promptsPath, 'utf-8'));
-  const limit = limitArg ? parseInt(limitArg, 10) : (prompts.length - skip);
-  const subset = prompts.slice(skip, skip + limit);
-
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  const imagesDir = deriveImagesDir(promptsPath);
-
-  console.log(`[vsub] ${subset.length} prompts to submit (skip=${skip}, limit=${limit}, max_open=${maxOpen})`);
-  console.log(`[vsub] images source: ${imagesDir}`);
-  console.log(`[vsub] connecting to Chrome on http://127.0.0.1:${CDP_PORT}`);
-
-  const browser = await puppeteer.connect({
-    browserURL: `http://127.0.0.1:${CDP_PORT}`,
-    defaultViewport: null,
-  });
-
-  // Find signed-in Gemini context (check incognito too)
+  let browser = null;
   let ctx = null;
-  for (const c of browser.browserContexts()) {
-    for (const p of await c.pages()) {
-      if (/gemini\.google\.com/.test(p.url() || '')) {
-        const ok = await p.evaluate(() => !!document.querySelector('[contenteditable=true]')).catch(() => false);
-        if (ok) { ctx = c; break; }
+  let preflightComplete = false;
+
+  try {
+    const prompts = JSON.parse(fs.readFileSync(promptsPath, 'utf-8'));
+    const limit = limitArg ? parseInt(limitArg, 10) : (prompts.length - skip);
+    const subset = prompts.slice(skip, skip + limit);
+
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const imagesDir = deriveImagesDir(promptsPath);
+
+    console.log(`[vsub] ${subset.length} prompts to submit (skip=${skip}, limit=${limit}, max_open=${maxOpen})`);
+    console.log(`[vsub] images source: ${imagesDir}`);
+    console.log(`[vsub] connecting to Chrome on http://127.0.0.1:${CDP_PORT}`);
+
+    browser = await puppeteer.connect({
+      browserURL: `http://127.0.0.1:${CDP_PORT}`,
+      defaultViewport: null,
+    });
+
+    // Find signed-in Gemini context (check incognito too)
+    for (const c of browser.browserContexts()) {
+      for (const p of await c.pages()) {
+        if (/gemini\.google\.com/.test(p.url() || '')) {
+          const ok = await p.evaluate(() => !!document.querySelector('[contenteditable=true]')).catch(() => false);
+          if (ok) { ctx = c; break; }
+        }
       }
+      if (ctx) break;
     }
-    if (ctx) break;
-  }
-  if (!ctx) {
-    console.error('[vsub] no signed-in Gemini context found');
-    await browser.disconnect();
-    process.exit(2);
-  }
-  console.log('[vsub] found signed-in Gemini context');
-
-  const savedIdxSet = new Set(readJsonOr(SAVED_FILE, []));
-  const todo = subset.filter(e => !savedIdxSet.has(e.idx));
-  console.log(`[vsub] ${subset.length - todo.length} already saved, ${todo.length} to submit`);
-
-  let submitted = 0, errors = 0;
-  for (const entry of todo) {
-    const padIdx = String(entry.idx).padStart(3, '0');
-    const imgPath = path.join(imagesDir, `${padIdx}-${entry.slug}.png`);
-    if (!fs.existsSync(imgPath)) {
-      console.log(`[vsub] ${padIdx} ✗ source image missing: ${imgPath}`);
-      errors++;
-      continue;
+    if (!ctx) {
+      console.error('[vsub] no signed-in Gemini context found');
+      return EXIT.preflight;
     }
+    console.log('[vsub] found signed-in Gemini context');
+    preflightComplete = true;
 
-    // Throttle: wait until pending tabs < max_open
-    while (true) {
-      const tabMap = readJsonOr(TAB_MAP_FILE, {});
-      const savedNow = new Set(readJsonOr(SAVED_FILE, []));
-      const pending = Object.entries(tabMap).filter(([_, m]) => !savedNow.has(m.idx)).length;
-      if (pending < maxOpen) break;
-      await sleep(3000);
-    }
+    const savedIdxSet = new Set(readJsonOr(SAVED_FILE, []));
+    const todo = subset.filter(e => !savedIdxSet.has(e.idx));
+    console.log(`[vsub] ${subset.length - todo.length} already saved, ${todo.length} to submit`);
 
-    let page = null;
-    try {
-      page = await ctx.newPage();
-      await page.goto(PLAIN_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      await sleep(2500);
-
-      console.log(`[vsub] ${padIdx} :: ${entry.slug}  (Tools → Create video)`);
-      const modeOk = await ensureVideoMode(page);
-      if (!modeOk) throw new Error('failed to enable video mode');
-
-      console.log(`[vsub] ${padIdx} uploading image`);
-      await uploadImage(page, imgPath);
-
-      const motion = (entry.motion_script || '').trim() || FALLBACK_MOTION;
-      console.log(`[vsub] ${padIdx} typing motion: "${motion.slice(0, 60)}..."`);
-      await typeMotion(page, motion);
-
-      console.log(`[vsub] ${padIdx} send`);
-      await clickSend(page);
-
-      const tid = targetIdOf(page);
-      const tabMap = readJsonOr(TAB_MAP_FILE, {});
-      tabMap[tid] = {
-        idx: entry.idx,
-        slug: entry.slug,
-        prompts_path: path.resolve(promptsPath),
-        submitted_at: new Date().toISOString(),
-        motion_used: motion,
-      };
-      writeJson(TAB_MAP_FILE, tabMap);
-
-      submitted++;
-      console.log(`[vsub] ${padIdx} ✓ submitted to tab ${tid.slice(0, 8)}  (${submitted}/${todo.length})`);
-    } catch (e) {
-      errors++;
-      console.log(`[vsub] ${padIdx} ✗ ${e.message}`);
-      if (page) {
-        try { await page.close(); } catch (_) {}
+    let submitted = 0, errors = 0, missingSourceErrors = 0;
+    for (const entry of todo) {
+      const padIdx = String(entry.idx).padStart(3, '0');
+      const imgPath = path.join(imagesDir, `${padIdx}-${entry.slug}.png`);
+      if (!fs.existsSync(imgPath)) {
+        console.log(`[vsub] ${padIdx} ✗ source image missing: ${imgPath}`);
+        missingSourceErrors++;
+        errors++;
+        continue;
       }
-    }
-    await sleep(800);
-  }
 
-  console.log(`\n[vsub] DONE submitting — ${submitted} ok, ${errors} errors`);
-  console.log(`[vsub] tab_map at ${TAB_MAP_FILE}`);
-  await browser.disconnect();
-})();
+      // Throttle: wait until pending tabs < max_open
+      while (true) {
+        const tabMap = readJsonOr(TAB_MAP_FILE, {});
+        const savedNow = new Set(readJsonOr(SAVED_FILE, []));
+        const pending = Object.entries(tabMap).filter(([_, m]) => !savedNow.has(m.idx)).length;
+        if (pending < maxOpen) break;
+        await sleep(3000);
+      }
+
+      let page = null;
+      try {
+        page = await ctx.newPage();
+        await page.goto(PLAIN_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        await sleep(2500);
+
+        console.log(`[vsub] ${padIdx} :: ${entry.slug}  (Tools → Create video)`);
+        const modeOk = await ensureVideoMode(page);
+        if (!modeOk) throw new Error('failed to enable video mode');
+
+        console.log(`[vsub] ${padIdx} uploading image`);
+        await uploadImage(page, imgPath);
+
+        const motion = (entry.motion_script || '').trim() || FALLBACK_MOTION;
+        console.log(`[vsub] ${padIdx} typing motion: "${motion.slice(0, 60)}..."`);
+        await typeMotion(page, motion);
+
+        console.log(`[vsub] ${padIdx} send`);
+        await clickSend(page);
+
+        const tid = targetIdOf(page);
+        const tabMap = readJsonOr(TAB_MAP_FILE, {});
+        tabMap[tid] = {
+          idx: entry.idx,
+          slug: entry.slug,
+          prompts_path: path.resolve(promptsPath),
+          submitted_at: new Date().toISOString(),
+          motion_used: motion,
+        };
+        writeJson(TAB_MAP_FILE, tabMap);
+
+        submitted++;
+        console.log(`[vsub] ${padIdx} ✓ submitted to tab ${tid.slice(0, 8)}  (${submitted}/${todo.length})`);
+      } catch (e) {
+        errors++;
+        console.log(`[vsub] ${padIdx} ✗ ${e.message}`);
+        if (page) {
+          try { await page.close(); } catch (_) {}
+        }
+      }
+      await sleep(800);
+    }
+
+    console.log(`\n[vsub] DONE submitting — ${submitted} ok, ${errors} errors`);
+    console.log(`[vsub] tab_map at ${TAB_MAP_FILE}`);
+    return determineExitCode({ errors, missingSourceErrors });
+  } catch (e) {
+    if (!preflightComplete) {
+      console.error(`[vsub] preflight failure: ${e.message}`);
+      return EXIT.preflight;
+    }
+    console.error(`[vsub] unrecovered failure: ${e.message}`);
+    return EXIT.generic;
+  } finally {
+    if (browser) {
+      await browser.disconnect().catch(() => {});
+    }
+  }
+}
+
+if (require.main === module) {
+  main().then(code => process.exit(code)).catch(e => {
+    console.error(`[vsub] unrecovered failure: ${e.message}`);
+    process.exit(EXIT.generic);
+  });
+}
+
+module.exports = {
+  determineExitCode,
+  EXIT,
+  main,
+};
