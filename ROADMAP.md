@@ -28,8 +28,10 @@ Goal: make Flow-first video animation reliable, observable, and recoverable.
 - Done: add Phase 0 state baseline in `src/node/video/video_state.cjs`.
 - Done: make `submit_videos.cjs` return non-zero when submission errors accumulate.
 - Done: add a non-watch idle timeout to `save_videos.cjs` so zero-progress runs exit with code `6`.
-- Continue robust failure detection in video scripts, especially explicit quota, policy, subscription, failed-tile, and UI-drift classification.
-- Build Flow as the primary video adapter; keep Gemini video as fallback only.
+- Done: add Phase 1 blocker classification, MP4 download helper, Flow adapter skeleton, and Flow smoke worker.
+- Next: run and tune a real one-clip Flow smoke test against `labs.google/fx/tools/flow`.
+- Continue robust failure detection in video scripts, especially exact Flow quota, policy, subscription, failed-tile, and UI-drift text seen in live runs.
+- Continue building Flow as the primary video adapter; keep Gemini video as fallback only.
 - Harden orchestration around render start, render completion, and retry paths.
 - Build `run_videos_autonomous.cjs` as a sibling to the image orchestrator.
 - Add explicit handling for missing assets, partial outputs, and stale temp files.

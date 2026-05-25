@@ -30,6 +30,13 @@ Obsidian-friendly entry point for the workspace memory layer.
 - `src/node/workers/save_videos.cjs` exits code `6` on non-watch zero-progress idle timeout.
 - Focused Node tests pass for submitter exit codes, saver timeout parsing, and video state reconciliation.
 
+## Latest Phase 1 Checkpoint
+- `src/node/video/video_errors.cjs` classifies quota, subscription, policy, failed-tile, and login blockers.
+- `src/node/video/video_download.cjs` saves MP4s from `data:`, `blob:`, and authenticated HTTP(S) sources with atomic writes.
+- `src/node/video/flow_adapter.cjs` exposes `generateOne()` for one Flow clip.
+- `src/node/workers/submit_flow_videos.cjs` is the smoke CLI: `node src/node/workers/submit_flow_videos.cjs <prompts.json> --limit 1 --max-in-flight 1`.
+- Focused Node tests pass for Phase 0 and Phase 1 modules.
+
 ## Current Video Decision
 - Production video target is Google Flow / Veo through `labs.google/fx/tools/flow`.
 - Available Ultra/Pro Business Flow credits make Flow the correct batch target.

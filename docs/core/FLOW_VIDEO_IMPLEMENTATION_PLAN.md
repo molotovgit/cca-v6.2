@@ -189,14 +189,17 @@ Goal: generate and save one Flow video from one existing image.
 
 Tasks:
 
-- Create `flow_adapter.cjs`.
-- Add `submit_flow_videos.cjs --limit 1 --max-in-flight 1`.
-- Implement Flow project open/create.
-- Implement start-frame upload.
-- Implement motion prompt entry.
-- Implement submit and wait-for-completion.
-- Implement MP4 download.
-- Save screenshots on every failed selector or blocker.
+- Done: create `flow_adapter.cjs`.
+- Done: add `submit_flow_videos.cjs --limit 1 --max-in-flight 1`.
+- Done: add blocker classification in `video_errors.cjs`.
+- Done: add provider-neutral MP4 download support in `video_download.cjs`.
+- Implemented skeleton: Flow project open/create.
+- Implemented skeleton: start-frame upload.
+- Implemented skeleton: motion prompt entry.
+- Implemented skeleton: submit and wait-for-completion.
+- Implemented skeleton: MP4 download.
+- Implemented skeleton: screenshots on failed selectors or blockers.
+- Next: run one live Flow smoke test and tune selectors/error text from the real UI.
 
 Acceptance:
 
@@ -317,4 +320,3 @@ Do these before building high-level orchestration.
 - What exact UI text appears for credit exhaustion on Ultra/Pro Business plans?
 - Should policy-blocked clips be skipped with a marker or halt the chapter?
 - How many in-flight clips are stable per account before failed tiles spike?
-
