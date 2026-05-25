@@ -22,12 +22,12 @@ recent log lines.
 
 | You want to… | Read |
 |---|---|
-| **Understand the architecture** | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| **Run on a single host** | [docs/QUICKSTART.md](docs/QUICKSTART.md) · [docs/SETUP.md](docs/SETUP.md) |
-| **Deploy across many hosts** | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) · [deploy/README.md](deploy/README.md) |
-| **Debug something that broke** | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
-| **Look up a specific command** | [docs/RUN.md](docs/RUN.md) |
-| **Hand the codebase to an AI agent** | [docs/CLAUDE.md](docs/CLAUDE.md) · [docs/PROMPT_FOR_CLAUDE.md](docs/PROMPT_FOR_CLAUDE.md) |
+| **Understand the architecture** | [docs/core/ARCHITECTURE.md](docs/core/ARCHITECTURE.md) |
+| **Run on a single host** | [docs/user/QUICKSTART.md](docs/user/QUICKSTART.md) · [docs/user/SETUP.md](docs/user/SETUP.md) |
+| **Deploy across many hosts** | [docs/ops/DEPLOYMENT.md](docs/ops/DEPLOYMENT.md) · [deploy/README.md](deploy/README.md) |
+| **Debug something that broke** | [docs/ops/TROUBLESHOOTING.md](docs/ops/TROUBLESHOOTING.md) |
+| **Look up a specific command** | [docs/user/RUN.md](docs/user/RUN.md) |
+| **Hand the codebase to an AI agent** | [docs/core/CLAUDE.md](docs/core/CLAUDE.md) · [docs/core/PROMPT_FOR_CLAUDE.md](docs/core/PROMPT_FOR_CLAUDE.md) |
 | **See what changed** | [CHANGELOG.md](CHANGELOG.md) |
 
 ---
@@ -37,9 +37,9 @@ recent log lines.
 ```cmd
 git clone https://github.com/molotovgit/cca-v6.2.git
 cd cca-v6.2
-copy examples\.env.example .env             :: fill in NOTION_API_KEY + credentials
-copy examples\accounts.json.example accounts.json   :: fill in your accounts
-copy examples\lessons.txt.example lessons.txt       :: list chapters to process
+copy config\examples\.env.example .env             :: fill in NOTION_API_KEY + credentials
+copy config\examples\accounts.json.example accounts.json   :: fill in your accounts
+copy config\examples\lessons.txt.example lessons.txt       :: list chapters to process
 setup.bat                                    :: one-time: deps + launch Chromes
 start.bat                                    :: run the pipeline
 ```
@@ -61,7 +61,7 @@ schtasks /create /tn ccajob /tr "C:\Users\<USER>\cca-v6.2\wrapper.bat" ^
 schtasks /run /tn ccajob
 ```
 
-Full walkthrough in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Full walkthrough in [docs/ops/DEPLOYMENT.md](docs/ops/DEPLOYMENT.md).
 
 ---
 
@@ -71,21 +71,19 @@ Full walkthrough in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 .
 ├── README.md                ← you are here
 ├── CHANGELOG.md
-├── docs/                    ← all human documentation
-├── deploy/                  ← env-driven launcher template + deployment docs
-├── examples/                ← copy these and fill in values (.env, accounts.json, lessons.txt)
-├── scripts/                 ← node-side orchestration + workers (cjs files)
-├── tools/                   ← shared Python libraries (accounts, browser, notion)
-├── *.py at root             ← stage-owning Python scripts (fetch/refine/prompts/upload + login)
+├── .cca/                    ← runtime state
+├── config/                  ← prompts and examples
+├── data/                    ← all generated content
+├── docs/                    ← all human documentation (core/, user/, ops/)
+├── deploy/                  ← deployment infrastructure
+├── src/                     ← source code (node/, python/)
 ├── setup.bat / start.bat    ← single-host quick-start
 ├── package.json             ← node deps
-├── requirements.txt         ← Python deps
-└── 80_prompt_formula.txt    ← Stage 3 prompt template
-└── refine_prompt.txt        ← Stage 2 prompt template
+└── requirements.txt         ← Python deps
 ```
 
 For a deep dive into each script and how the stages connect, read
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+[docs/core/ARCHITECTURE.md](docs/core/ARCHITECTURE.md).
 
 ---
 

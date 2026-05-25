@@ -29,12 +29,12 @@ if errorlevel 1 (
 
 REM ---- 2. Bootstrap .env from template (first run only) ----
 if not exist .env (
-  if not exist .env.example (
-    echo ERROR: .env.example missing — cannot bootstrap .env.
+  if not exist config\.env.example (
+    echo ERROR: config\.env.example missing — cannot bootstrap .env.
     pause
     exit /b 1
   )
-  copy .env.example .env >nul
+  copy config\.env.example .env >nul
   echo.
   echo ============================================================
   echo   .env created from template. Notepad will open it now.
@@ -48,12 +48,12 @@ if not exist .env (
 
 REM ---- 2b. Bootstrap lessons.txt from template (first run only) ----
 if not exist lessons.txt (
-  if not exist lessons.txt.example (
-    echo ERROR: lessons.txt.example missing — cannot bootstrap lessons.txt.
+  if not exist config\examples\lessons.txt.example (
+    echo ERROR: config\examples\lessons.txt.example missing — cannot bootstrap lessons.txt.
     pause
     exit /b 1
   )
-  copy lessons.txt.example lessons.txt >nul
+  copy config\examples\lessons.txt.example lessons.txt >nul
   echo.
   echo ============================================================
   echo   lessons.txt created from template. Notepad will open it now.
@@ -77,13 +77,13 @@ pip install -q -r requirements.txt
 REM ---- 4. Ensure both Chrome windows are running ----
 echo.
 echo Ensuring Chrome windows are up...
-node scripts\setup_chrome.cjs
+node src\node\setup\setup_chrome.cjs
 
 
 REM ---- 4b. Attempt auto-login (best-effort; falls back to manual on blocker) ----
 echo.
 echo Attempting auto-login (uses CHATGPT_* / GEMINI_* from .env)...
-python auto_login.py
+python src\python\auth\auto_login.py
 set AUTOLOGIN_RC=%errorlevel%
 
 
@@ -105,7 +105,7 @@ pause
 
 
 REM ---- 6. Run batch pipeline over every chapter in lessons.txt ----
-node scripts\run_batch.cjs
+node src\node\orchestrators\run_batch.cjs
 
 
 echo.

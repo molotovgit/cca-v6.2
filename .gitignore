@@ -19,27 +19,30 @@ __pycache__/
 venv/
 
 # Pipeline output (generated content; large)
-chapters/
-refined/
-prompts/
-images/
-zips/
-videos/
-generated/
-lessons/
+data/chapters/
+data/refined/
+data/prompts/
+data/images/
+data/zips/
+data/videos/
+data/generated/
+data/lessons/
+data/reports/
+data/logs/
+data/ruvector.db
+ruvector.db
 
 # Browser persistent profiles (cookies, login state, user-specific)
+data/chrome_keepalive_profile/
+data/chrome_gemini_profile/
 chrome_keepalive_profile/
 chrome_gemini_profile/
 chrome-chatgpt-cdp/
 chrome-gemini-cdp/
 
 # Submit/save runtime state (per-chapter, rebuilt on each run)
+data/.cca/
 .cca/
-
-# Local pipeline run logs
-logs/
-reports/
 
 # Diagnostic / probe artifacts (screenshots, ad-hoc scripts)
 _*.png
@@ -63,3 +66,7 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+.claude/
+.claude-flow/
+.swarm/
+tests/

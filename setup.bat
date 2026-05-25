@@ -6,7 +6,7 @@ REM   does this; you only need this file as a standalone shortcut.
 REM ============================================================
 
 cd /d "%~dp0"
-node scripts\setup_chrome.cjs
+node src\node\setup\setup_chrome.cjs
 
 echo.
 echo ============================================================
