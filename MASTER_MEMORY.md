@@ -28,8 +28,8 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - `docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md` is the implementation-ready plan.
 - v4 evidence: image stage completed `80/80`, then Flow Stage 5 failed. The real Flow script crashed on `ReferenceError: TARGET_IN_FLIGHT is not defined`, then later hit failed tiles/rate-limit behavior and watchdog kill with `0/80` videos saved.
 - The deprecated zip does not include the actual `animate_flow.cjs` used in the v4 Flow run, so do not depend on resurrecting that missing script.
-- `src/node/workers/submit_videos.cjs` can log failures but still finish successfully, which hides partial or total submission failure.
-- `src/node/workers/save_videos.cjs` mainly waits for a rendered `<video>` element and does not yet classify Gemini quota, safety, subscription, UI, or render-failed states.
+- Phase 0 fixed the first silent-failure layer: `src/node/workers/submit_videos.cjs` now exits non-zero on submission errors, and `src/node/workers/save_videos.cjs` now exits code `6` on non-watch idle timeout.
+- `src/node/workers/save_videos.cjs` still does not classify Gemini quota, safety, subscription, UI, or render-failed states beyond idle timeout.
 - Video does not yet have the same autonomous orchestration, rescue, blocker classification, credit/account handling, and disk-first resume model as the image path.
 - Gemini UI selectors and state handling are brittle and need continual verification.
 - Account rotation is necessary when rate limits hit.
@@ -46,10 +46,10 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - Keep changes scoped; do not refactor unrelated parts while stabilizing the pipeline.
 
 ## Next Action Queue
-1. Implement Phase 0 from `docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md`.
-2. Add `src/node/video/video_state.cjs` with atomic state and disk reconciliation.
-3. Make current video submit/save scripts fail non-zero on errors and timeouts.
-4. Build a Flow adapter smoke test for one image -> one MP4 with `max_in_flight=1`.
+1. Start Phase 1 from `docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md`: Flow smoke clip with `max_in_flight=1`.
+2. Create `src/node/video/flow_adapter.cjs` around explicit Flow UI actions, blocker detection, and MP4 download.
+3. Add `src/node/workers/submit_flow_videos.cjs --limit 1 --max-in-flight 1`.
+4. Wire Flow smoke runs through `src/node/video/video_state.cjs` before any batch orchestration.
 5. Build `run_videos_autonomous.cjs` only after the smoke path is observable and resumable.
 6. Keep the working image pipeline intact while Flow video is implemented.
 

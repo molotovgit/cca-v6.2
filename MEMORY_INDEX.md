@@ -18,11 +18,17 @@ Obsidian-friendly entry point for the workspace memory layer.
 - [deploy/README.md](deploy/README.md): deployment-specific guidance.
 
 ## Current Issue Priority
-1. Flow-first video animation reliability: `video_state.cjs`, Flow adapter, `submit_videos.cjs`, `save_videos.cjs`, and `run_videos_autonomous.cjs`.
+1. Flow-first video smoke implementation: `flow_adapter.cjs`, `submit_flow_videos.cjs`, one image -> one MP4, `max_in_flight=1`.
 2. Workspace/setup correctness: `.env` template path, accounts path, fresh-run docs.
 3. Python pipeline blockers: `args.lang` typos in fetch/upload.
 4. Missing dependency: `playwright-stealth` for Gemini keepalive.
 5. Test coverage around path resolution, account lookup, and video failure modes.
+
+## Latest Phase 0 Checkpoint
+- `src/node/video/video_state.cjs` exists and reconciles prompt/image/video state into `data/.cca/video_state.json`.
+- `src/node/workers/submit_videos.cjs` exits non-zero for submission errors, including missing source images.
+- `src/node/workers/save_videos.cjs` exits code `6` on non-watch zero-progress idle timeout.
+- Focused Node tests pass for submitter exit codes, saver timeout parsing, and video state reconciliation.
 
 ## Current Video Decision
 - Production video target is Google Flow / Veo through `labs.google/fx/tools/flow`.

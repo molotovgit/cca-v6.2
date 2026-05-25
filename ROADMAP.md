@@ -25,9 +25,10 @@ Exit criteria:
 
 Goal: make Flow-first video animation reliable, observable, and recoverable.
 
-- Add robust failure detection in video scripts.
-- Make `submit_videos.cjs` return non-zero when any submission fails.
-- Teach `save_videos.cjs` to detect and report Gemini error states instead of polling forever.
+- Done: add Phase 0 state baseline in `src/node/video/video_state.cjs`.
+- Done: make `submit_videos.cjs` return non-zero when submission errors accumulate.
+- Done: add a non-watch idle timeout to `save_videos.cjs` so zero-progress runs exit with code `6`.
+- Continue robust failure detection in video scripts, especially explicit quota, policy, subscription, failed-tile, and UI-drift classification.
 - Build Flow as the primary video adapter; keep Gemini video as fallback only.
 - Harden orchestration around render start, render completion, and retry paths.
 - Build `run_videos_autonomous.cjs` as a sibling to the image orchestrator.
