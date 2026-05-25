@@ -112,22 +112,33 @@ def upload_file_multipart(
 
     print(f"[notion] multi-part upload: {file_size:,} bytes -> {n_parts} parts of <= {chunk_mb} MB")
 
-    # 1. Create file_upload object
-    r = httpx.post(
-        f"{NOTION_API}/file_uploads",
-        headers=_headers(api_key, json_body=True),
-        json={
-            "filename":        file_path.name,
-            "content_type":    content_type,
-            "mode":            "multi_part",
-            "number_of_parts": n_parts,
-        },
-        timeout=30,
-    )
-    if r.status_code != 200:
-        raise RuntimeError(
-            f"Notion file_uploads create failed: {r.status_code} {r.text[:400]}"
-        )
+    # 1. Create file_upload object (retry on transient network errors)
+    create_attempts = 0
+    while True:
+        create_attempts += 1
+        try:
+            r = httpx.post(
+                f"{NOTION_API}/file_uploads",
+                headers=_headers(api_key, json_body=True),
+                json={
+                    "filename":        file_path.name,
+                    "content_type":    content_type,
+                    "mode":            "multi_part",
+                    "number_of_parts": n_parts,
+                },
+                timeout=120,
+            )
+            if r.status_code == 200:
+                break
+            raise RuntimeError(f"create status={r.status_code} body={r.text[:300]}")
+        except (httpx.RequestError, RuntimeError) as e:
+            if create_attempts >= 5:
+                raise RuntimeError(
+                    f"Notion file_uploads create failed after {create_attempts} attempts: {e}"
+                )
+            backoff = 2 ** (create_attempts - 1)
+            print(f"[notion] create attempt {create_attempts}/5 failed: {e}; retry in {backoff}s")
+            time.sleep(backoff)
     obj        = r.json()
     upload_id  = obj["id"]
     upload_url = obj.get("upload_url") or f"{NOTION_API}/file_uploads/{upload_id}/send"
@@ -171,17 +182,28 @@ def upload_file_multipart(
                 print(f"[notion] part {part}/{n_parts} failed (status={status}); retry {attempt}/{max_retries_per_part} in {backoff}s. body={body}")
                 time.sleep(backoff)
 
-    # 3. Complete
-    r = httpx.post(
-        f"{NOTION_API}/file_uploads/{upload_id}/complete",
-        headers=_headers(api_key, json_body=True),
-        json={},
-        timeout=60,
-    )
-    if r.status_code != 200:
-        raise RuntimeError(
-            f"Notion file_uploads complete failed: {r.status_code} {r.text[:400]}"
-        )
+    # 3. Complete (retry on transient network errors)
+    complete_attempts = 0
+    while True:
+        complete_attempts += 1
+        try:
+            r = httpx.post(
+                f"{NOTION_API}/file_uploads/{upload_id}/complete",
+                headers=_headers(api_key, json_body=True),
+                json={},
+                timeout=180,
+            )
+            if r.status_code == 200:
+                break
+            raise RuntimeError(f"complete status={r.status_code} body={r.text[:400]}")
+        except (httpx.RequestError, RuntimeError) as e:
+            if complete_attempts >= 5:
+                raise RuntimeError(
+                    f"Notion file_uploads complete failed after {complete_attempts} attempts: {e}"
+                )
+            backoff = 2 ** (complete_attempts - 1)
+            print(f"[notion] complete attempt {complete_attempts}/5 failed: {e}; retry in {backoff}s")
+            time.sleep(backoff)
     obj = r.json()
     if obj.get("status") != "uploaded":
         raise RuntimeError(
