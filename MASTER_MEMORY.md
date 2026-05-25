@@ -57,6 +57,7 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - 2026-05-26: Started Phase 0 implementation. Work is split into recoverable slices: video state helpers, submitter failure exits, saver idle timeout, and focused Node tests. Sub-agents should work in isolated worktrees and avoid image pipeline changes.
 - 2026-05-26: Phase 0 submitter checkpoint complete. `src/node/workers/submit_videos.cjs` now maps preflight, missing-source, and generic submission failures to non-zero exit codes, with `src/node/workers/submit_videos_exit.test.cjs` covering the mapping.
 - 2026-05-26: Phase 0 video state checkpoint complete. `src/node/video/video_state.cjs` now provides atomic state read/write and prompt/image/video reconciliation, with `tests/node/video_state.test.cjs` covering corrupt reads, saved detection, missing assets, and submitted-state preservation.
+- 2026-05-26: Phase 0 saver checkpoint complete. `src/node/workers/save_videos.cjs` now has a non-watch idle timeout (`--max-idle-ms`, `CCA_SAVE_VIDEOS_MAX_IDLE_MS`, or `CCA_SAVE_VIDEOS_IDLE_TIMEOUT_MS`) and exits with code `6` on zero-progress timeout; watch mode remains unlimited.
 
 ## Index Links
 - [MEMORY_INDEX.md](MEMORY_INDEX.md)

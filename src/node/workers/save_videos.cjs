@@ -3,12 +3,12 @@
 // contribution-rt.usercontent.google.com), closes the tab.
 //
 // Usage:
-//   node scripts/save_videos.cjs <prompts.json>          # exits when all done
-//   node scripts/save_videos.cjs <prompts.json> --watch  # poll forever
+//   node scripts/save_videos.cjs <prompts.json>                  # exits when all done
+//   node scripts/save_videos.cjs <prompts.json> --watch          # poll forever
 //   node scripts/save_videos.cjs <prompts.json> --no-close
+//   node scripts/save_videos.cjs <prompts.json> --max-idle-ms N  # non-watch idle timeout
 
 'use strict';
-const puppeteer = require('puppeteer');
 const path      = require('path');
 const fs        = require('fs');
 const https     = require('https');
@@ -16,6 +16,9 @@ const https     = require('https');
 const CDP_PORT  = parseInt(process.env.GEMINI_CDP_PORT || '9223', 10);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const POLL_MS = 4000;
+const DEFAULT_MAX_IDLE_MS = 30 * 60 * 1000;
+const EXIT_TIMEOUT = 6;
+let puppeteer;
 
 const REPO     = path.resolve(__dirname, '../../..');
 const STATE_DIR = path.join(REPO, 'data', '.cca');
@@ -32,6 +35,50 @@ function writeJson(file, data) {
   fs.renameSync(tmp, file);
 }
 
+function parsePositiveInt(raw, def) {
+  if (raw == null || raw === '') return def;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : def;
+}
+
+function parseCliArgs(argv, env = process.env) {
+  const promptsPath = argv[2];
+  const watchMode = argv.includes('--watch');
+  const closeTabs = !argv.includes('--no-close');
+  const flagIdx = argv.findIndex(arg => arg === '--max-idle-ms' || arg === '--idle-timeout-ms');
+  const flagVal = flagIdx >= 0 ? argv[flagIdx + 1] : null;
+  const inlineFlag = argv.find(arg => arg.startsWith('--max-idle-ms=') || arg.startsWith('--idle-timeout-ms='));
+  const inlineVal = inlineFlag ? inlineFlag.split('=', 2)[1] : null;
+  const maxIdleMs = watchMode ? null : (
+    parsePositiveInt(
+      flagVal || inlineVal || env.CCA_SAVE_VIDEOS_MAX_IDLE_MS || env.CCA_SAVE_VIDEOS_IDLE_TIMEOUT_MS,
+      DEFAULT_MAX_IDLE_MS
+    )
+  );
+  return { promptsPath, watchMode, closeTabs, maxIdleMs };
+}
+
+function shouldTimeout({ watchMode, savedCount, totalCount, lastSavedAt, now, maxIdleMs }) {
+  if (watchMode) return false;
+  if (savedCount >= totalCount) return false;
+  return (now - lastSavedAt) >= maxIdleMs;
+}
+
+function idleTimeoutMessage({ savedCount, totalCount, lastSavedAt, maxIdleMs }) {
+  const idleMs = Date.now() - lastSavedAt;
+  const idleSec = Math.ceil(idleMs / 1000);
+  const limitSec = Math.ceil(maxIdleMs / 1000);
+  return `[vsave] idle timeout after ${idleSec}s without a new saved video (limit ${limitSec}s); saved ${savedCount}/${totalCount}. exiting with code ${EXIT_TIMEOUT}`;
+}
+
+class IdleTimeoutError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'IdleTimeoutError';
+    this.code = EXIT_TIMEOUT;
+  }
+}
+
 function deriveOutputDir(promptsJsonPath) {
   const abs = path.resolve(promptsJsonPath);
   const parts = abs.split(path.sep);
@@ -41,6 +88,11 @@ function deriveOutputDir(promptsJsonPath) {
   newParts[idx] = 'videos';
   newParts[newParts.length - 1] = newParts[newParts.length - 1].replace(/\.json$/i, '');
   return newParts.join(path.sep);
+}
+
+function getPuppeteer() {
+  if (!puppeteer) puppeteer = require('puppeteer');
+  return puppeteer;
 }
 
 async function findVideoOnTab(page) {
@@ -105,14 +157,20 @@ async function downloadVideoBuf(page, src) {
   return downloadViaNode(src, page);
 }
 
-(async () => {
-  const promptsPath = process.argv[2];
-  if (!promptsPath) {
-    console.error('Usage: node save_videos.cjs <prompts.json> [--watch] [--no-close]');
-    process.exit(1);
+function enforceIdleTimeout(state) {
+  if (shouldTimeout(state)) {
+    const message = idleTimeoutMessage(state);
+    console.error(message);
+    throw new IdleTimeoutError(message);
   }
-  const watchMode = process.argv.includes('--watch');
-  const closeTabs = !process.argv.includes('--no-close');
+}
+
+async function main(argv = process.argv) {
+  const { promptsPath, watchMode, closeTabs, maxIdleMs } = parseCliArgs(argv);
+  if (!promptsPath) {
+    console.error('Usage: node save_videos.cjs <prompts.json> [--watch] [--no-close] [--max-idle-ms N]');
+    return 1;
+  }
   const prompts = JSON.parse(fs.readFileSync(promptsPath, 'utf-8'));
   const outDir = deriveOutputDir(promptsPath);
   fs.mkdirSync(outDir, { recursive: true });
@@ -120,6 +178,7 @@ async function downloadVideoBuf(page, src) {
   console.log(`[vsave] watching ${path.basename(promptsPath)}  (${prompts.length} expected)`);
   console.log(`[vsave] output: ${outDir}`);
   console.log(`[vsave] close-tabs: ${closeTabs}, watch: ${watchMode}`);
+  console.log(`[vsave] idle timeout: ${watchMode ? 'disabled (watch mode)' : `${maxIdleMs}ms max idle without a new saved video`}`);
 
   const savedIdxs = new Set(readJsonOr(SAVED_FILE, []));
   for (const entry of prompts) {
@@ -131,86 +190,144 @@ async function downloadVideoBuf(page, src) {
   writeJson(SAVED_FILE, [...savedIdxs]);
   console.log(`[vsave] starting with ${savedIdxs.size} already saved`);
 
-  const browser = await puppeteer.connect({
+  const browser = await getPuppeteer().connect({
     browserURL: `http://127.0.0.1:${CDP_PORT}`,
     defaultViewport: null,
   });
 
   let iter = 0;
-  while (true) {
-    iter++;
-    const tabMap = readJsonOr(TAB_MAP_FILE, {});
-    const wantedTids = new Set(
-      Object.entries(tabMap).filter(([_, m]) => !savedIdxs.has(m.idx)).map(([tid]) => tid)
-    );
+  let lastSavedAt = Date.now();
 
-    let scanned = 0, savedThisIter = 0;
-    for (const ctx of browser.browserContexts()) {
-      for (const page of await ctx.pages()) {
-        let tid;
-        try { tid = page.target()._targetId; } catch (_) { continue; }
-        if (!wantedTids.has(tid)) continue;
-        const entry = tabMap[tid];
-        if (!entry) continue;
+  try {
+    while (true) {
+      enforceIdleTimeout({
+        watchMode,
+        savedCount: savedIdxs.size,
+        totalCount: prompts.length,
+        lastSavedAt,
+        now: Date.now(),
+        maxIdleMs: maxIdleMs || DEFAULT_MAX_IDLE_MS,
+      });
 
-        scanned++;
+      iter++;
+      const tabMap = readJsonOr(TAB_MAP_FILE, {});
+      const wantedTids = new Set(
+        Object.entries(tabMap).filter(([_, m]) => !savedIdxs.has(m.idx)).map(([tid]) => tid)
+      );
 
-        // Wake without focus-stealing (timeout race)
-        try {
-          await Promise.race([
-            page.screenshot({ type: 'jpeg', quality: 1, fullPage: false }),
-            new Promise((_, rj) => setTimeout(() => rj(new Error('screenshot timeout')), 4000)),
-          ]);
-        } catch (_) {}
-        try {
-          await Promise.race([
-            page.evaluate(() => {
-              try {
-                Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
-                Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
-                document.dispatchEvent(new Event('visibilitychange'));
-              } catch (_) {}
-            }),
-            new Promise((_, rj) => setTimeout(() => rj(new Error('eval timeout')), 3000)),
-          ]);
-        } catch (_) {}
+      let scanned = 0, savedThisIter = 0;
+      for (const ctx of browser.browserContexts()) {
+        for (const page of await ctx.pages()) {
+          enforceIdleTimeout({
+            watchMode,
+            savedCount: savedIdxs.size,
+            totalCount: prompts.length,
+            lastSavedAt,
+            now: Date.now(),
+            maxIdleMs: maxIdleMs || DEFAULT_MAX_IDLE_MS,
+          });
 
-        const found = await findVideoOnTab(page);
-        if (!found) continue;
+          let tid;
+          try { tid = page.target()._targetId; } catch (_) { continue; }
+          if (!wantedTids.has(tid)) continue;
+          const entry = tabMap[tid];
+          if (!entry) continue;
 
-        try {
-          const buf = await downloadVideoBuf(page, found.src);
-          const outFile = path.join(outDir, `${String(entry.idx).padStart(3, '0')}-${entry.slug}.mp4`);
-          fs.writeFileSync(outFile, buf);
-          savedIdxs.add(entry.idx);
-          writeJson(SAVED_FILE, [...savedIdxs]);
-          savedThisIter++;
-          console.log(`[vsave] ${String(entry.idx).padStart(3, '0')} ${entry.slug}  → ${found.w}x${found.h} ${(buf.length / 1024 / 1024).toFixed(2)} MB`);
+          scanned++;
 
-          if (closeTabs) {
-            try { await page.close(); } catch (_) {}
-            const m2 = readJsonOr(TAB_MAP_FILE, {});
-            delete m2[tid];
-            writeJson(TAB_MAP_FILE, m2);
+          // Wake without focus-stealing (timeout race)
+          try {
+            await Promise.race([
+              page.screenshot({ type: 'jpeg', quality: 1, fullPage: false }),
+              new Promise((_, rj) => setTimeout(() => rj(new Error('screenshot timeout')), 4000)),
+            ]);
+          } catch (_) {}
+          try {
+            await Promise.race([
+              page.evaluate(() => {
+                try {
+                  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+                  Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+                  document.dispatchEvent(new Event('visibilitychange'));
+                } catch (_) {}
+              }),
+              new Promise((_, rj) => setTimeout(() => rj(new Error('eval timeout')), 3000)),
+            ]);
+          } catch (_) {}
+
+          const found = await findVideoOnTab(page);
+          if (!found) continue;
+
+          try {
+            const buf = await downloadVideoBuf(page, found.src);
+            const outFile = path.join(outDir, `${String(entry.idx).padStart(3, '0')}-${entry.slug}.mp4`);
+            fs.writeFileSync(outFile, buf);
+            savedIdxs.add(entry.idx);
+            writeJson(SAVED_FILE, [...savedIdxs]);
+            savedThisIter++;
+            lastSavedAt = Date.now();
+            console.log(`[vsave] ${String(entry.idx).padStart(3, '0')} ${entry.slug}  → ${found.w}x${found.h} ${(buf.length / 1024 / 1024).toFixed(2)} MB`);
+
+            if (closeTabs) {
+              try { await page.close(); } catch (_) {}
+              const m2 = readJsonOr(TAB_MAP_FILE, {});
+              delete m2[tid];
+              writeJson(TAB_MAP_FILE, m2);
+            }
+          } catch (e) {
+            console.log(`[vsave] ${String(entry.idx).padStart(3, '0')} download error: ${e.message}`);
           }
-        } catch (e) {
-          console.log(`[vsave] ${String(entry.idx).padStart(3, '0')} download error: ${e.message}`);
         }
       }
+
+      if ((iter % 4) === 1) {
+        console.log(`[vsave] iter ${iter}: ${scanned} pending, +${savedThisIter} this round  (total ${savedIdxs.size}/${prompts.length})`);
+      }
+
+      if (savedIdxs.size >= prompts.length && !watchMode) {
+        console.log(`[vsave] all ${prompts.length} saved — exiting`);
+        break;
+      }
+
+      enforceIdleTimeout({
+        watchMode,
+        savedCount: savedIdxs.size,
+        totalCount: prompts.length,
+        lastSavedAt,
+        now: Date.now(),
+        maxIdleMs: maxIdleMs || DEFAULT_MAX_IDLE_MS,
+      });
+
+      await sleep(POLL_MS);
     }
 
-    if ((iter % 4) === 1) {
-      console.log(`[vsave] iter ${iter}: ${scanned} pending, +${savedThisIter} this round  (total ${savedIdxs.size}/${prompts.length})`);
-    }
-
-    if (savedIdxs.size >= prompts.length && !watchMode) {
-      console.log(`[vsave] all ${prompts.length} saved — exiting`);
-      break;
-    }
-
-    await sleep(POLL_MS);
+    console.log(`\n[vsave] DONE — ${savedIdxs.size} / ${prompts.length} saved`);
+    return 0;
+  } finally {
+    try {
+      await browser.disconnect();
+    } catch (_) {}
   }
+}
 
-  console.log(`\n[vsave] DONE — ${savedIdxs.size} / ${prompts.length} saved`);
-  await browser.disconnect();
-})();
+if (require.main === module) {
+  main().then(code => {
+    process.exit(code);
+  }).catch(err => {
+    if (err && err.code === EXIT_TIMEOUT) {
+      process.exit(EXIT_TIMEOUT);
+      return;
+    }
+    console.error(`[vsave] unrecovered failure: ${err && err.message ? err.message : err}`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  DEFAULT_MAX_IDLE_MS,
+  EXIT_TIMEOUT,
+  parseCliArgs,
+  shouldTimeout,
+  idleTimeoutMessage,
+  main,
+};
