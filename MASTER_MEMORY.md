@@ -61,6 +61,7 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - 2026-05-26: Phase 0 hardening checkpoint complete. `video_state.cjs` now resolves repo-relative state paths from the repo root even when invoked from a different cwd; Node tests pass for submitter, saver, and state helpers.
 - 2026-05-26: Started Phase 1 Flow smoke implementation. Target is a conservative one-clip path: blocker classifier, Flow download helper, `flow_adapter.cjs` with `generateOne()`, and `submit_flow_videos.cjs --limit 1 --max-in-flight 1`. Keep Gemini video as fallback only and keep image pipeline untouched.
 - 2026-05-26: Phase 1 blocker classifier checkpoint complete. `src/node/video/video_errors.cjs` classifies visible quota/credit, subscription, policy/safety, failed-tile, and login/session blockers into video states and stable exit codes.
+- 2026-05-26: Phase 1 download helper checkpoint complete. `src/node/video/video_download.cjs` downloads MP4s from `data:`, `blob:`, and authenticated HTTP(S) URLs, writes atomically, and enforces minimum MP4 size.
 
 ## Index Links
 - [MEMORY_INDEX.md](MEMORY_INDEX.md)
