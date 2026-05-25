@@ -181,9 +181,10 @@ async function uploadImage(page, imagePath) {
 async function typeMotionScript(page, text) {
   const promptHandle = await page.evaluateHandle(() => {
     const eds = Array.from(document.querySelectorAll('[contenteditable=true]'));
-    return eds.find(el => /Enter a prompt for Gemini|Describe your video/i.test(
-      el.getAttribute('aria-label') || el.getAttribute('placeholder') || ''
-    )) || eds[0] || null;
+    return eds.find(el => {
+      const lbl = (el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim();
+      return /Enter a prompt for Gemini|Describe your video|Введите запрос для Gemini|prompt.*Gemini|Geminidan/i.test(lbl);
+    }) || eds.find(el => { const r = el.getBoundingClientRect(); return r.width > 200 && r.height > 30; }) || eds[0] || null;
   });
   const el = promptHandle.asElement();
   if (!el) throw new Error('prompt input not found after upload');
@@ -197,8 +198,12 @@ async function typeMotionScript(page, text) {
 
 async function clickSend(page) {
   const sendBox = await page.evaluate(() => {
-    const btn = Array.from(document.querySelectorAll('button, [role=button]'))
-      .find(b => /^Send message$/i.test(b.getAttribute('aria-label') || ''));
+    const btns = Array.from(document.querySelectorAll('button, [role=button]'));
+    const exact = btns.find(b => /^(Send message|Отправить сообщение|Yuborish|Submit)$/i.test((b.getAttribute('aria-label') || '').trim()));
+    const btn = exact || btns.find(b => {
+      const a = (b.getAttribute('aria-label') || '').toLowerCase();
+      return a && (a.includes('send message') || a.includes('отправить сообщ') || a.includes('yubor') || /^send$|^submit$/.test(a));
+    });
     if (!btn) return null;
     const r = btn.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
