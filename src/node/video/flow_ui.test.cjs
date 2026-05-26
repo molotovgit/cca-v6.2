@@ -109,17 +109,30 @@ test('ACTIVITY_RE detects in-progress activity verbs', () => {
   assert.doesNotMatch('Download video', ACTIVITY_RE);
 });
 
-// PROGRESS_RE is the frozen selectors contract. Its trailing `\b` after `%`
-// means it does NOT match real "99%" strings (`%` followed by space/end is not
-// a word boundary). Documented here so the limitation is captured; flow_probe
-// uses its own local percent matcher for the in-progress heuristic. See note
-// to reviewer — the contract regex likely needs correcting upstream.
-test('PROGRESS_RE is the frozen contract (does not match bare percentages)', () => {
-  assert.doesNotMatch('play_circle Video 99%', PROGRESS_RE);
-  assert.doesNotMatch('play_circle 0%', PROGRESS_RE);
+// PROGRESS_RE was previously broken: a trailing `\b` after `%` is unsatisfiable
+// (`%` is non-word and the next char is space/end, also non-word), so it never
+// matched real "7%" / "99%" strings. Now corrected to capture the percentage.
+test('PROGRESS_RE matches real in-progress percentages', () => {
+  assert.match('Rendering 7%', PROGRESS_RE);
+  assert.match('play_circle Video 99%', PROGRESS_RE);
+  assert.equal('Rendering 7% complete'.match(PROGRESS_RE)[1], '7');
+  assert.equal('play_circle Video 99%'.match(PROGRESS_RE)[1], '99');
 });
 
-test('unknown live selectors remain null TODO(live) placeholders', () => {
-  assert.equal(COMPLETED_TILE_SELECTOR, null);
-  assert.equal(DOWNLOAD_AFFORDANCE, null);
+test('COMPLETED_TILE_SELECTOR matches the live media.getMediaUrlRedirect <video> src', () => {
+  assert.equal(typeof COMPLETED_TILE_SELECTOR, 'object');
+  assert.ok(COMPLETED_TILE_SELECTOR.videoSrcRe instanceof RegExp);
+  assert.match(
+    'https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=11111111-2222-3333-4444-555555555555',
+    COMPLETED_TILE_SELECTOR.videoSrcRe
+  );
+  assert.doesNotMatch('https://labs.google/fx/tools/flow/project/abc', COMPLETED_TILE_SELECTOR.videoSrcRe);
+});
+
+test('DOWNLOAD_AFFORDANCE is the authenticated video-src HTTP transport (follow redirects)', () => {
+  assert.deepEqual(DOWNLOAD_AFFORDANCE, {
+    kind: 'video-src',
+    transport: 'http',
+    followRedirects: true,
+  });
 });
