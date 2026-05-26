@@ -25,7 +25,17 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
-from playwright_stealth import Stealth
+
+# playwright-stealth is optional: it only adds extra anti-detection at launch.
+# If it's missing or incompatible, degrade gracefully — the keepalive still
+# launches with its built-in init-script patches below.
+try:
+    from playwright_stealth import Stealth
+    _STEALTH_AVAILABLE = True
+except Exception:
+    Stealth = None
+    _STEALTH_AVAILABLE = False
+    print("[setup] playwright-stealth not installed — continuing with init-script patches only")
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -77,11 +87,14 @@ def main() -> None:
             ignore_default_args=["--enable-automation"],
         )
 
-        try:
-            Stealth().apply_stealth_sync(context)
-            print("[setup] playwright-stealth applied to context")
-        except Exception as e:
-            print(f"[setup] WARNING: stealth apply failed: {e}")
+        if _STEALTH_AVAILABLE:
+            try:
+                Stealth().apply_stealth_sync(context)
+                print("[setup] playwright-stealth applied to context")
+            except Exception as e:
+                print(f"[setup] WARNING: stealth apply failed: {e}")
+        else:
+            print("[setup] playwright-stealth unavailable — skipping (init-script patches still active)")
 
         # Extra init-script: belt-and-suspenders patches on top of stealth
         # (some are duplicates of stealth but harmless; some are extras)
