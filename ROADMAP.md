@@ -10,6 +10,8 @@ Implementation plan: [docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md](docs/core/FLO
 
 Goal: make the repo easy to prepare and validate before any run.
 
+Status: done (2026-05-26). `args.lang` typos fixed; account/`.cca`/`.env` paths aligned across code + docs; `config/examples/.env.example` created and `start.bat` bootstrap pointed at it; `src/node/setup/verify_workspace.cjs` pre-run health check added; package `__init__.py` markers + `.gitignore` un-ignores `tests/`; setup tests added.
+
 - Fix setup and docs path mismatches.
 - Align account path handling across code and documentation.
 - Close the `args.lang` typos in fetch and upload.
