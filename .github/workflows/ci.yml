@@ -1,0 +1,39 @@
+# CI gate: runs the full test universe (Node + Python) on push/PR.
+# NOTE: the test:node / test:python npm scripts use shell glob expansion
+# (e.g. src/node/video/*.test.cjs). These rely on a POSIX shell; the
+# ubuntu-latest runner uses bash, which expands them correctly.
+name: CI
+
+on:
+  push:
+    branches: [main, DaddysBranch]
+  pull_request:
+
+# Skip Chromium download for the puppeteer dependency during npm ci.
+env:
+  PUPPETEER_SKIP_DOWNLOAD: "true"
+  PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+
+jobs:
+  node-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+      - run: npm run test:node
+
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest tests/python -q
