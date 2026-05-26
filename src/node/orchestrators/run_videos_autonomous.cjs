@@ -1,5 +1,16 @@
 'use strict';
 
+// Autonomous Google Flow video orchestrator.
+//
+// Concurrency (controlled via AIMD controller, default behaves as max-in-flight 1):
+//   --max-in-flight N   CLI flag; positive integer. Overrides the env var below.
+//   CCA_VIDEO_MAX_IN_FLIGHT   env var; default 1, clamped to [1, 4].
+// The resolved ceiling seeds a concurrency controller (resolved lazily from
+// ../video/video_concurrency.cjs, injectable via deps.concurrency/deps.controller)
+// that is created ONCE before the loop so AIMD evidence persists across iterations.
+// With no flag and no env, the ceiling is 1, so the loop stays behavior-identical
+// to a single-in-flight pass.
+
 const fs = require('fs');
 const path = require('path');
 
@@ -29,6 +40,7 @@ function parseCliArgs(argv = process.argv) {
   const args = argv.slice(2);
   const promptsPath = args[0] && !String(args[0]).startsWith('--') ? args[0] : null;
   let limit = null;
+  let maxInFlight = null;
   let maxAttempts = DEFAULT_MAX_ATTEMPTS;
   let maxNoProgress = DEFAULT_MAX_NO_PROGRESS;
 
@@ -41,6 +53,15 @@ function parseCliArgs(argv = process.argv) {
     }
     if (arg.startsWith('--limit=')) {
       limit = parseRequiredPositiveInt(arg.split('=', 2)[1]);
+      continue;
+    }
+    if (arg === '--max-in-flight') {
+      maxInFlight = parseRequiredPositiveInt(args[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--max-in-flight=')) {
+      maxInFlight = parseRequiredPositiveInt(arg.split('=', 2)[1]);
       continue;
     }
     if (arg === '--max-attempts') {
@@ -62,14 +83,14 @@ function parseCliArgs(argv = process.argv) {
     }
   }
 
-  return { promptsPath, limit, maxAttempts, maxNoProgress };
+  return { promptsPath, limit, maxInFlight, maxAttempts, maxNoProgress };
 }
 
 function validateCliArgs(parsed) {
-  const { promptsPath, limit, maxAttempts, maxNoProgress } = parsed || {};
+  const { promptsPath, limit, maxInFlight, maxAttempts, maxNoProgress } = parsed || {};
 
   if (!promptsPath) {
-    const err = new Error('Usage: node run_videos_autonomous.cjs <prompts.json> [--limit N] [--max-attempts N] [--max-no-progress N]');
+    const err = new Error('Usage: node run_videos_autonomous.cjs <prompts.json> [--limit N] [--max-in-flight N] [--max-attempts N] [--max-no-progress N]');
     err.code = EXIT_CODES.preflight;
     throw err;
   }
@@ -86,6 +107,14 @@ function validateCliArgs(parsed) {
     throw err;
   }
 
+  // When supplied, --max-in-flight must be a positive integer. We do NOT reject
+  // values over the ceiling here; the concurrency controller clamps to [1, 4].
+  if (maxInFlight != null && (!Number.isFinite(maxInFlight) || maxInFlight < 1)) {
+    const err = new Error(`--max-in-flight must be a positive integer; got ${maxInFlight}`);
+    err.code = EXIT_CODES.preflight;
+    throw err;
+  }
+
   if (!Number.isFinite(maxAttempts) || maxAttempts < 1) {
     const err = new Error(`--max-attempts must be a positive integer; got ${maxAttempts}`);
     err.code = EXIT_CODES.preflight;
@@ -98,7 +127,7 @@ function validateCliArgs(parsed) {
     throw err;
   }
 
-  return { promptsPath, limit, maxAttempts, maxNoProgress };
+  return { promptsPath, limit, maxInFlight, maxAttempts, maxNoProgress };
 }
 
 function summarizeVideoState(state, { limit = null, maxAttempts = DEFAULT_MAX_ATTEMPTS } = {}) {
@@ -177,15 +206,20 @@ function defaultReadState({ promptsPath, statePath = DEFAULT_STATE_PATH, now = (
 async function defaultRunWorker({
   promptsPath,
   statePath = DEFAULT_STATE_PATH,
+  controller,
   adapter,
   browser,
   screenshotsDir,
   now,
 } = {}) {
+  // Derive the in-flight budget from the AIMD controller. With the default
+  // ceiling of 1 this resolves to 1, matching the previous hardcoded behavior.
+  const inFlight = controller ? controller.currentLimit() : 1;
   return runSmokeWorker({
     promptsPath,
-    limit: 1,
-    maxInFlight: 1,
+    limit: inFlight,
+    maxInFlight: inFlight,
+    controller,
     statePath,
     adapter,
     browser,
@@ -202,6 +236,18 @@ async function main(argv = process.argv, deps = {}) {
   const logger = deps.logger || console;
   const now = deps.now || (() => new Date().toISOString());
   let noProgressStreak = 0;
+
+  // Resolve the concurrency module lazily so this file does not require
+  // ../video/video_concurrency.cjs at module top — during parallel dev that
+  // file lives on another branch. deps.concurrency overrides it for tests.
+  const concurrency = deps.concurrency || require('../video/video_concurrency.cjs');
+  // CLI flag overrides env; default 1; clamp to [1, 4].
+  const ceiling = concurrency.parseMaxInFlight(
+    { CCA_VIDEO_MAX_IN_FLIGHT: parsed.maxInFlight != null ? String(parsed.maxInFlight) : process.env.CCA_VIDEO_MAX_IN_FLIGHT },
+    { floor: 1, ceiling: 4 }
+  );
+  // Created ONCE before the loop so AIMD evidence persists across iterations.
+  const controller = deps.controller || concurrency.createConcurrencyController({ floor: 1, ceiling });
 
   while (true) {
     const state = await readState({ promptsPath: parsed.promptsPath, statePath, now });
@@ -221,6 +267,7 @@ async function main(argv = process.argv, deps = {}) {
       promptsPath: parsed.promptsPath,
       statePath,
       plan,
+      controller,
       adapter: deps.adapter,
       browser: deps.browser,
       screenshotsDir: deps.screenshotsDir,
@@ -233,9 +280,17 @@ async function main(argv = process.argv, deps = {}) {
       maxAttempts: parsed.maxAttempts,
     });
 
+    const madeProgress = refreshedPlan.savedCount > savedBefore;
+
+    // Feed the AIMD controller evidence from this pass so its in-flight budget
+    // additively increases on progress and multiplicatively decreases on stall.
+    if (controller && typeof controller.recordOutcome === 'function') {
+      controller.recordOutcome({ result: madeProgress ? 'saved' : 'failed_tile' });
+    }
+
     if (!shouldContinue(refreshedPlan)) return refreshedPlan.exitCode;
 
-    if (refreshedPlan.savedCount > savedBefore) {
+    if (madeProgress) {
       noProgressStreak = 0;
     } else {
       noProgressStreak += 1;
