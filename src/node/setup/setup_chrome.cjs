@@ -54,7 +54,12 @@ function launchChrome(chromePath, port, profileDir, urls) {
     `--user-data-dir=${profileDir}`,
     '--no-first-run',
     '--no-default-browser-check',
-    '--disable-features=ChromeWhatsNewUI',
+    // DiceWebSigninInterception is the chrome://signin-dice intercept that
+    // pops up after Google SSO and BLOCKS the OAuth callback from reaching
+    // chatgpt.com. Disabling it lets the Google SSO redirect chain complete
+    // synchronously: chatgpt.com/auth/login → accounts.google.com → consent
+    // → auth.openai.com/callback → chatgpt.com (logged in).
+    '--disable-features=ChromeWhatsNewUI,DiceWebSigninInterception',
     ...urls,
   ];
   const child = spawn(chromePath, args, {
