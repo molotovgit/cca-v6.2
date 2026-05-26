@@ -71,6 +71,7 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - 2026-05-26: Phase 2 batch helper checkpoint complete. `src/node/video/video_batch.cjs` summarizes video state, selects retryable items, caps exhausted retries, builds progress snapshots/signatures, detects no-progress, and chooses aggregate exit codes for sequential orchestration.
 - 2026-05-26: Phase 2 autonomous orchestrator checkpoint complete. `src/node/orchestrators/run_videos_autonomous.cjs` loops `submit_flow_videos` one clip at a time, re-reads `video_state`, honors `--limit`, `--max-attempts`, and `--max-no-progress`, and exits with stable codes for completion, quota, policy, missing assets, retry exhaustion, and no-progress timeout.
 - 2026-05-26: Phase 2 docs/memory checkpoint. Batch helper and orchestrator scaffolding are code-complete with focused tests, but production readiness still depends on one live Flow smoke pass and one small live sequential batch pass.
+- 2026-05-26: Phase 2 workspace cleanup checkpoint. Closed Phase 2 sub-agents and removed temporary worktrees plus `agent/phase2-*` branches. Local Obsidian state, Ruflo AgentDB runtime files, and `cca_v4.zip` remain uncommitted workspace artifacts.
 
 ## Index Links
 - [MEMORY_INDEX.md](MEMORY_INDEX.md)
