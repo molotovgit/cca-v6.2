@@ -36,6 +36,7 @@ Status: in progress. Flow smoke + sequential-batch + Phase 3 concurrency code pa
 - Done: fix the false-negative post-submit path — `awaitCompletedTile` reloads/rescans the Videos tab before concluding failure; the failed-tile card is treated as non-terminal.
 - Done: wire completed-tile discovery + MP4 download from `flow_probe` findings (`<video src=...media.getMediaUrlRedirect>`); MP4 download PROVEN live (two real clips saved as valid MP4s through the session).
 - Done: ship the Phase 3 controlled-concurrency mechanism (`video_concurrency.cjs` AIMD controller, default in-flight 1, `--max-in-flight`/`CCA_VIDEO_MAX_IN_FLIGHT`).
+- Done: ship Phase 4 integration — opt-in `CCA_ENABLE_VIDEO=1` non-fatal VIDEOS pipeline stage, dashboard video panel, and docs (Notion upload stays image-only).
 - Next: prove the source image is attached as the Flow start frame (visible renders look prompt-generated).
 - Next: run one full live one-clip `generateOne` (generate → reload → download → saved), then a small sequential batch with `run_videos_autonomous.cjs`, then tune live concurrency 2/3/4.
 - Continue robust failure detection in video scripts, especially exact Flow quota, policy, subscription, failed-tile, and UI-drift text seen in live runs.
