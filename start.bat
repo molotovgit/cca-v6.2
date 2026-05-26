@@ -29,12 +29,12 @@ if errorlevel 1 (
 
 REM ---- 2. Bootstrap .env from template (first run only) ----
 if not exist .env (
-  if not exist config\.env.example (
-    echo ERROR: config\.env.example missing — cannot bootstrap .env.
+  if not exist config\examples\.env.example (
+    echo ERROR: config\examples\.env.example missing — cannot bootstrap .env.
     pause
     exit /b 1
   )
-  copy config\.env.example .env >nul
+  copy config\examples\.env.example .env >nul
   echo.
   echo ============================================================
   echo   .env created from template. Notepad will open it now.
