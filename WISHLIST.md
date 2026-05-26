@@ -22,6 +22,37 @@ Related planning notes: [MASTER_MEMORY.md](MASTER_MEMORY.md), [MEMORY_INDEX.md](
 - Improve validation for generated video inputs before rendering begins.
 - Add end-to-end checks that confirm a successful upload after render completion.
 
+## Flow video — post-smoke fixes (from 2026-05-26 live smoke)
+
+Found during Codex's first live Flow smoke test (6 attempts, all ended `failed_ui`).
+The automation never reached a completed video tile over CDP — the only evidence Flow
+rendered is the user manually reloading and seeing two videos in All Media. These all
+block calling Phase 2 production-ready.
+
+- Select Video mode explicitly before generating. Flow's model dropdown defaults to
+  `Nano Banana 2` = image mode (`Generating will use 0 credits`); several smoke attempts
+  silently ran in image mode and produced no video. `configureVideoMode` must confirm
+  the create row shows `Video · 4s` (15 credits) before submit.
+- Attach the start frame via the unlabeled left `Start` drop zone. Frames mode has no
+  labeled upload button — only large unlabeled `Start`/`End` role-button drop zones
+  (`Start swap_horiz Swap first and last frames End`). `uploadStartFrame` must target the
+  Start slot and CONFIRM the PNG bound (thumbnail/filename); attachment was never proven
+  and renders looked prompt-generated.
+- Reload/rescan after submit before judging the result. `waitForCompletion` polls only
+  the live generating view and throws when its failed-tile grace window expires. Need:
+  submit → reload the project URL → open the `Videos` / `All Media` tab → match the new
+  tile → then decide.
+- Treat the `warning Failed … Reuse Prompt … Delete image … 99%` card as non-terminal.
+  It persisted next to a fresh `play_circle 0%` render and proved a false negative after
+  reload. Disambiguate by correlating it against a post-reload Videos-tab scan, not by
+  hard-failing on the card.
+- Capture the completed-tile DOM and MP4 download mechanism — both are UNKNOWN. No live
+  run ever reached a finished tile, so `findDownloadTarget`/`DOWNLOAD_TEXTS` and the
+  `blob:rendered` test fixture are unverified guesses. The next live run is partly a
+  discovery task: record the done-tile selectors and whether download is a `<video>` src,
+  a per-tile menu, or needs network interception. Then one image → one saved MP4 in
+  `data/videos/...` with `video_state.json` = `saved`.
+
 ## Fetch and upload
 
 - Fix `args.lang` typos in fetch and upload paths.
