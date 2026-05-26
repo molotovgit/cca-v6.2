@@ -14,6 +14,20 @@ You need:
 - [ ] A **Gemini account** (preferably a fresh one — see "Known issues" below)
 - [ ] Each chapter you want to process must have a child page titled **"Images"** (or "Images 1" / "Images (1)") in Notion. The pipeline uploads the zip to this subpage.
 
+**Verify the workspace is ready before running.** Run the health check:
+
+```
+node src/node/setup/verify_workspace.cjs
+```
+
+It confirms the minimum pre-run requirements and fails fast if any are missing:
+
+- [ ] `.env` present (`NOTION_API_KEY` filled in)
+- [ ] `data/accounts.json` present and valid JSON (or `.env` credentials as fallback)
+- [ ] Chrome reachable on `:9222` (ChatGPT) and `:9223` (Gemini)
+- [ ] Node + Python deps installed
+- [ ] `data/` directories writable (including `data/.cca/` runtime state)
+
 ---
 
 ## Part 1 — First-time setup (do once per machine)
@@ -87,7 +101,7 @@ set CCA_DRY_RUN=
 
 **v6 uses `accounts.json` for ChatGPT + Gemini credentials** (was `.env` in v5). The `.env` file still holds the Notion API key + Chrome ports.
 
-Copy `accounts.json.example` to `accounts.json` and fill in real values:
+Copy `config/examples/accounts.json.example` to `data/accounts.json` and fill in real values:
 
 ```json
 {
@@ -110,13 +124,15 @@ CDP_PORT=9222
 GEMINI_CDP_PORT=9223
 ```
 
-(If `accounts.json` is absent, v6 falls back to reading `CHATGPT_EMAIL/PASSWORD` and `GEMINI_EMAIL/PASSWORD` from `.env` for backward compatibility.)
+(If `data/accounts.json` is absent, v6 falls back to reading `CHATGPT_EMAIL/PASSWORD` and `GEMINI_EMAIL/PASSWORD` from `.env` for backward compatibility.)
+
+To inspect or manage rotation state, use the supported invocation `python -m src.python.auth.accounts {get|rotate|reset|status} <provider>` (e.g. `python -m src.python.auth.accounts status`). State lives in `data/.cca/active_accounts.json`.
 
 Save and close Notepad. The terminal continues.
 
 ### Step 2.4 — Run
 
-If you skipped 2.3 because `.env` already exists, just **double-click `start.bat`** now.
+If you skipped 2.3 because `.env` already exists, just **double-click `start.bat`** now. (If unsure the workspace is ready, run `node src/node/setup/verify_workspace.cjs` first — see the checklist at the top.)
 
 The terminal will:
 1. Verify Node + Python installed
@@ -255,7 +271,7 @@ For batches > ~10 chapters, plan to split across days or accounts.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `Chrome not reachable on port 9222 / 9223` | A Chrome window was closed | Re-run `setup.bat` (relaunches missing windows) |
-| `.env missing` | First run, hasn't been bootstrapped | `start.bat` will create it from `.env.example` and open Notepad |
+| `.env missing` | First run, hasn't been bootstrapped | `start.bat` will create it from `config/examples/.env.example` and open Notepad |
 | `lessons.txt not found` | First run, hasn't been bootstrapped | `start.bat` will create it from the example and open Notepad |
 | `Notion 401 — API token is invalid` | `NOTION_API_KEY` in `.env` is the placeholder, or the integration is wrong | Open `.env`, paste a real `ntn_...` or `secret_...` key |
 | `Notion 403 on block attach` (UPLOAD stage) | Integration lacks **Insert content** capability or isn't connected to the chapter page | Notion → Settings & members → My connections → your integration → enable "Insert content"; on the chapter page → Add connections → select your integration |

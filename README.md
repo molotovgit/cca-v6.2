@@ -50,7 +50,7 @@ recent log lines.
 git clone https://github.com/molotovgit/cca-v6.2.git
 cd cca-v6.2
 copy config\examples\.env.example .env             :: fill in NOTION_API_KEY + credentials
-copy config\examples\accounts.json.example accounts.json   :: fill in your accounts
+copy config\examples\accounts.json.example data\accounts.json   :: fill in your accounts
 copy config\examples\lessons.txt.example lessons.txt       :: list chapters to process
 setup.bat                                    :: one-time: deps + launch Chromes
 start.bat                                    :: run the pipeline
@@ -83,9 +83,9 @@ Full walkthrough in [docs/ops/DEPLOYMENT.md](docs/ops/DEPLOYMENT.md).
 .
 ├── README.md                ← you are here
 ├── CHANGELOG.md
-├── .cca/                    ← runtime state
 ├── config/                  ← prompts and examples
-├── data/                    ← all generated content
+├── data/                    ← all generated content + runtime state
+│   └── .cca/                ← runtime state (active_accounts, tab_map)
 ├── docs/                    ← all human documentation (core/, user/, ops/)
 ├── deploy/                  ← deployment infrastructure
 ├── src/                     ← source code (node/, python/)

@@ -60,7 +60,7 @@ Or download the zip from GitHub and extract it.
 **Double-click `setup.bat`** (or run `setup.bat` from a terminal in the repo folder).
 
 It will:
-1. Create `.env` from `config/.env.example` if it doesn't exist (so you only need to edit the values)
+1. Create `.env` from `config/examples/.env.example` if it doesn't exist (so you only need to edit the values)
 2. Run `npm install` — installs `puppeteer` and other deps from `package.json`
 3. Run `pip install -r requirements.txt` — installs Python deps (`notion-client`, `python-dotenv`, etc.)
 4. Launch **two Chrome windows**:
@@ -73,7 +73,7 @@ If Chrome is in a non-standard location, the script may not find it. Edit the `C
 
 ## 4. Edit `.env` with your credentials
 
-`setup.bat` already created `.env` for you (copied from `.env.example`). Open it in any text editor and fill in your real values:
+`setup.bat` already created `.env` for you (copied from `config/examples/.env.example`). Open it in any text editor and fill in your real values:
 
 ```
 NOTION_API_KEY=secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -154,7 +154,27 @@ Save the file when you're done.
 
 ---
 
-## 8. Run the pipeline
+## 8. Verify the workspace is ready
+
+Before running, confirm the workspace is healthy:
+
+```
+node src/node/setup/verify_workspace.cjs
+```
+
+This health check fails fast if anything below is missing. Minimum pre-run checklist:
+
+- [ ] `.env` present (with `NOTION_API_KEY` filled in)
+- [ ] `data/accounts.json` present and valid JSON (or `.env` ChatGPT/Gemini credentials as fallback)
+- [ ] Chrome reachable on `:9222` (ChatGPT) and `:9223` (Gemini)
+- [ ] Node + Python deps installed (`npm install` / `pip install -r requirements.txt`, done by `setup.bat`)
+- [ ] `data/` directories writable (chapters/refined/prompts/images/zips and `data/.cca/` runtime state)
+
+Fix anything that fails, then re-run `verify_workspace.cjs` until it passes.
+
+---
+
+## 9. Run the pipeline
 
 **Double-click `start.bat`** (or `node src/node/orchestrators/run_pipeline.cjs`).
 
@@ -223,9 +243,10 @@ Delete that stage's output folder/file (e.g., delete `images/...` to redo image 
 | `src/node/orchestrators/run_batch.cjs` | Reads `lessons.txt` and runs `run_pipeline.cjs` once per chapter |
 | `src/node/orchestrators/run_pipeline.cjs` | Per-chapter 5-stage orchestrator (called by `run_batch.cjs`) |
 | `src/node/setup/setup_chrome.cjs` | Launches the two debug-port Chrome windows |
+| `src/node/setup/verify_workspace.cjs` | Pre-run health check — verifies `.env`, `data/accounts.json`, Chrome `:9222`/`:9223`, deps, and `data/` dirs |
 | `src/node/orchestrators/run_autonomous.cjs` | IMAGES stage wrapper (autonomous orchestrator) |
-| `config/.env.example` | Template — committed; copied to `.env` by `setup.bat` |
-| `.env` | Your real API keys & passwords (gitignored — auto-created from `.env.example`) |
+| `config/examples/.env.example` | Template — committed; copied to `.env` by `setup.bat` |
+| `.env` | Your real API keys & passwords (gitignored — auto-created from `config/examples/.env.example`) |
 | `requirements.txt` | Python deps |
 | `package.json` | Node deps |
 | `config/prompts/refine_prompt.txt` | The formula ChatGPT uses to refine chapters |
