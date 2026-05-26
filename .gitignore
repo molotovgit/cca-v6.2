@@ -31,6 +31,9 @@ data/reports/
 data/logs/
 data/ruvector.db
 ruvector.db
+# Ruflo MCP runtime store (created when the ruflo MCP server runs)
+agentdb.rvf
+agentdb.rvf.lock
 
 # Browser persistent profiles (cookies, login state, user-specific)
 data/chrome_keepalive_profile/

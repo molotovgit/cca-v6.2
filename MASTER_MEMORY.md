@@ -46,14 +46,13 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - Keep changes scoped; do not refactor unrelated parts while stabilizing the pipeline.
 
 ## Next Action Queue
-1. Patch Flow post-submit handling: after render progress/stale failed text, reload or rescan All Media before declaring failure.
-2. Prove the source image is actually attached as the Flow start frame, not merely that prompt-only videos render.
-3. Implement completed-tile discovery and MP4 download from Flow after reload.
-4. Confirm one image becomes one saved MP4 under `data/videos/...` and `data/.cca/video_state.json` records `saved`.
-5. Run a small sequential Flow batch with `node src/node/orchestrators/run_videos_autonomous.cjs <prompts.json> --limit <N> --max-attempts 3 --max-no-progress 3`.
+1. Done (2026-05-26): Flow post-submit reload/rescan + completed-tile discovery + MP4 download wired (`flow_adapter.awaitCompletedTile`/`findCompletedTile`, `flow_ui.COMPLETED_TILE_SELECTOR`/`DOWNLOAD_AFFORDANCE`). MP4 download PROVEN live — two real Flow clips saved as valid MP4s via `video_download.cjs` through the `:9223` session.
+2. Prove the source image is actually attached as the Flow start frame (STILL OPEN — visible renders looked prompt-generated; `verifyStartFrameAttached` exists but attachment is unproven live).
+3. Run one full live `submit_flow_videos.cjs <prompts> --limit 1` end-to-end: image → generate → reload → download → `data/.cca/video_state.json` = `saved`.
+4. Run a small sequential live batch with `node src/node/orchestrators/run_videos_autonomous.cjs <prompts.json> --limit <N> --max-attempts 3 --max-no-progress 3`.
+5. Done (2026-05-26): Phase 3 concurrency mechanism shipped (`video_concurrency.cjs` AIMD, default `CCA_VIDEO_MAX_IN_FLIGHT=1`, `--max-in-flight`). Tune `2/3/4` against real failed-tile rates only AFTER the live one-clip + sequential paths are stable.
 6. Add the account-rotation hook after the real Flow quota/credit blocker shape is known.
-7. Do not start Phase 3 concurrency until the one-clip smoke and sequential batch path are stable against the live Flow UI.
-8. Keep the working image pipeline intact while Flow video is implemented.
+7. Keep the working image pipeline intact while Flow video is implemented.
 
 ## Implementation Log
 - 2026-05-26: Started Phase 0 implementation. Work is split into recoverable slices: video state helpers, submitter failure exits, saver idle timeout, and focused Node tests. Sub-agents should work in isolated worktrees and avoid image pipeline changes.
@@ -75,6 +74,8 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - 2026-05-26: Phase 2 workspace cleanup checkpoint. Closed Phase 2 sub-agents and removed temporary worktrees plus `agent/phase2-*` branches. Local Obsidian state, Ruflo AgentDB runtime files, and `cca_v4.zip` remain uncommitted workspace artifacts.
 - 2026-05-26: Live Flow smoke checkpoint. Created ignored smoke data at `data/prompts/smoke/flow-smoke.json` and `data/images/smoke/flow-smoke/001-intro.png`, connected to Flow project `a14d1a43-d896-4da3-a84b-ebb5195b1b55`, and hardened `flow_adapter.cjs` for live UI realities: project-ready wait, Video/Frames/16:9/1x/4s mode setup, Flow start-frame drop-zone fallback, prompt textbox detection, submit-button ranking, and stale failed-tile handling. The worker reached an actual Flow video tile and progress, but incorrectly marked the run failed before rediscovering completed renders.
 - 2026-05-26: Live Flow smoke correction from user observation. After reloading Flow, two generated videos appeared in All Media, so Flow did render. The current automation gap is post-submit discovery/download and state reconciliation after reload. The start-frame image path is still not proven because the visible completed videos looked prompt-generated, so the next code slice must verify actual image-to-video attachment before treating the smoke as complete.
+- 2026-05-26: Probe discovery. `flow_probe.cjs` (CDP discovery harness) captured the previously-unknown completed-tile DOM: a finished Flow tile exposes a `<video>` whose src is `https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=<UUID>`; there is no per-tile download button (download is via that authenticated URL).
+- 2026-05-26: Phase 3 + download-seam checkpoint (merged to DaddysBranch). Shipped controlled concurrency as a 4-lane swarm: `src/node/video/video_concurrency.cjs` (AIMD controller, `parseMaxInFlight`, default in-flight 1), N-slot concurrent scheduler + `classifyControllerResult` + state-write mutex in `submit_flow_videos.cjs`, `--max-in-flight`/`CCA_VIDEO_MAX_IN_FLIGHT` wiring (controller owned across the loop) in `run_videos_autonomous.cjs`, and wired the live download seams in `flow_adapter.cjs`/`flow_ui.cjs` from the probe findings. Integration gate caught + fixed a double-`recordOutcome` (the worker is the single source of AIMD outcomes; the orchestrator only owns controller lifecycle). Full Node suite 248 pass / 0 fail. MP4 download PROVEN live: two real Flow clips downloaded as valid MP4s (`ftyp isom`, ~0.9 MB / ~1.6 MB) via `video_download.cjs` redirect-following + session cookies through Chrome `:9223`. Default concurrency stays 1 (structural). Still pending live validation: full one-clip `generateOne` and start-frame attachment.
 
 ## Index Links
 - [MEMORY_INDEX.md](MEMORY_INDEX.md)

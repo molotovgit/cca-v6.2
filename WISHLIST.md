@@ -29,6 +29,11 @@ The automation never reached a completed video tile over CDP — the only eviden
 rendered is the user manually reloading and seeing two videos in All Media. These all
 block calling Phase 2 production-ready.
 
+**Update 2026-05-26 (shipped to DaddysBranch):** reload/rescan, completed-tile
+discovery, MP4 download (PROVEN live), failed-card-non-terminal, and the completed-tile
+DOM capture (via `flow_probe`) are all DONE. The one remaining open item below is
+proving the source image actually attaches as the start frame.
+
 - Select Video mode explicitly before generating. Flow's model dropdown defaults to
   `Nano Banana 2` = image mode (`Generating will use 0 credits`); several smoke attempts
   silently ran in image mode and produced no video. `configureVideoMode` must confirm
