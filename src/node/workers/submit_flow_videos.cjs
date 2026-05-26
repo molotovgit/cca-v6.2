@@ -77,7 +77,7 @@ function deriveFlowDirs(promptsPath) {
   };
 }
 
-function validateSmokeConfig({ promptsPath, limit, maxInFlight }) {
+function validateSmokeConfig({ promptsPath, limit, maxInFlight, ceiling = 4, smoke = false }) {
   if (!promptsPath) {
     const err = new Error('Usage: node submit_flow_videos.cjs <prompts.json> [--limit N] [--max-in-flight 1]');
     err.code = EXIT_CODES.preflight;
@@ -102,8 +102,15 @@ function validateSmokeConfig({ promptsPath, limit, maxInFlight }) {
     throw err;
   }
 
-  if (maxInFlight > 1) {
-    const err = new Error(`smoke phase only supports --max-in-flight 1; got ${maxInFlight}`);
+  if (smoke === true) {
+    // Smoke phase is single-flight only: one tab, one clip at a time.
+    if (maxInFlight > 1) {
+      const err = new Error(`smoke phase only supports --max-in-flight 1; got ${maxInFlight}`);
+      err.code = EXIT_CODES.preflight;
+      throw err;
+    }
+  } else if (maxInFlight > ceiling) {
+    const err = new Error(`--max-in-flight must be <= ${ceiling}; got ${maxInFlight}`);
     err.code = EXIT_CODES.preflight;
     throw err;
   }
@@ -233,6 +240,37 @@ function classifyError(err) {
   };
 }
 
+// Maps a per-clip outcome (success object or caught error) to the coarse
+// signal the AIMD controller needs: distinguishing render-tile failures
+// (which warrant backoff) from blockers and other UI faults.
+function classifyControllerResult(outcome, err) {
+  // Success path: the worker resolved with a saved/exit-0 outcome.
+  if (!err && outcome && typeof outcome === 'object') {
+    const state = outcome.state;
+    const exitCode = typeof outcome.exitCode === 'number' ? outcome.exitCode : null;
+    if (state === 'saved' || exitCode === EXIT_CODES.ok) return 'saved';
+  }
+
+  if (err) {
+    // A failed render tile is signalled either by the adapter's stage, an
+    // explicit failed_tile category, or visible text classified as failed_tile.
+    if (err.stage === 'await_completed_tile' || err.category === 'failed_tile') {
+      return 'failed_tile';
+    }
+    const visible = classifyVisibleText(err.message || String(err));
+    if (visible && visible.category === 'failed_tile') return 'failed_tile';
+
+    // Quota/subscription/policy blockers map to a backoff-worthy 'blocked'.
+    const classified = classifyError(err);
+    if (classified.exitCode === EXIT_CODES.quota || classified.exitCode === EXIT_CODES.policy) {
+      return 'blocked';
+    }
+  }
+
+  // Timeout / missing-asset / generic / non-tile failed_ui all fall through here.
+  return 'other';
+}
+
 function chooseBetterExitCode(current, next) {
   const currentPriority = EXIT_PRIORITY.get(current) ?? 0;
   const nextPriority = EXIT_PRIORITY.get(next) ?? 0;
@@ -331,17 +369,52 @@ async function newPageFromBrowser(browser) {
   throw new Error('connected browser does not expose newPage()');
 }
 
+// No-op controller used on the default/smoke path: a fixed single slot with no
+// AIMD adaptation. Lane C injects a real controller; the shape is the contract.
+// currentLimit reflects the configured selection limit so the default path
+// still honours --limit N; concurrency stays at 1 (see slotCount below), so
+// the default path runs the original sequential loop byte-identically.
+function createNoopController(limit = 1) {
+  const safeLimit = Number.isFinite(limit) && limit >= 1 ? limit : 1;
+  return {
+    floor: 1,
+    ceiling: 1,
+    currentLimit() {
+      return safeLimit;
+    },
+    recordOutcome() {},
+  };
+}
+
+// Tiny in-process promise-chain mutex so concurrent slots never interleave
+// writeVideoStateFile at the syscall level. writeVideoStateFile is already
+// atomic (temp file + rename), but serializing the calls keeps the in-memory
+// `reconciledState` mutation and its flush together as one critical section.
+function createStateWriteMutex() {
+  let tail = Promise.resolve();
+  return function withStateLock(fn) {
+    const run = tail.then(() => fn());
+    // Swallow rejection on the chain so one failure does not poison the queue;
+    // the caller still receives the real result/rejection from `run`.
+    tail = run.then(() => {}, () => {});
+    return run;
+  };
+}
+
 async function runSmokeWorker({
   promptsPath,
   limit,
   maxInFlight,
   adapter,
   browser,
+  controller,
+  ceiling = 4,
   statePath = DEFAULT_STATE_PATH,
   screenshotsDir = path.join(REPO_ROOT, 'data', '.cca', 'flow_screenshots'),
   now = () => new Date().toISOString(),
 } = {}) {
-  const validated = validateSmokeConfig({ promptsPath, limit, maxInFlight });
+  const validated = validateSmokeConfig({ promptsPath, limit, maxInFlight, ceiling, smoke: false });
+  const activeController = controller || createNoopController(validated.limit);
   const { imagesDir, videosDir } = deriveFlowDirs(validated.promptsPath);
   let prompts;
   try {
@@ -373,50 +446,99 @@ async function runSmokeWorker({
     throw err;
   }
 
-  const selection = selectEligibleItems(reconciledState, validated.limit);
+  // The controller's current limit caps how many clips we pull this run; the
+  // no-op default reports 1 so the smoke/default path is unchanged.
+  const selection = selectEligibleItems(reconciledState, activeController.currentLimit());
   if (selection.selected.length === 0) return determineNoWorkExitCode(reconciledState);
 
   const resolvedAdapter = adapter || loadFlowAdapter();
   const ownsBrowser = !browser;
   const activeBrowser = browser || await connectToChrome();
+  const withStateLock = createStateWriteMutex();
   let runExitCode = EXIT_CODES.ok;
 
-  try {
-    for (const item of selection.selected) {
-      const itemNow = now();
-      let page = null;
-      try {
-        if (typeof resolvedAdapter.generateOne !== 'function') throw new Error('flow adapter must export generateOne()');
-        page = await newPageFromBrowser(activeBrowser);
-        const outcome = await resolvedAdapter.generateOne({
-          page,
-          item,
-          motion: motionForItem(item, prompts),
-          imagePath: resolvePathForFs(item.imagePath),
-          videoPath: resolvePathForFs(item.videoPath),
-          options: {
-            screenshotsDir,
-            minVideoBytes: 50 * 1024,
-          },
-        });
+  // Process a single queue item end-to-end: open a fresh page, drive the
+  // adapter, normalize/merge/persist its outcome under the write mutex, fold
+  // its exit code into the run aggregate, and report the result to the
+  // controller. Each slot only ever mutates its own items[idx] key.
+  async function processItem(item) {
+    const itemNow = now();
+    let page = null;
+    let outcome = null;
+    let caught = null;
+    try {
+      if (typeof resolvedAdapter.generateOne !== 'function') throw new Error('flow adapter must export generateOne()');
+      page = await newPageFromBrowser(activeBrowser);
+      outcome = await resolvedAdapter.generateOne({
+        page,
+        item,
+        motion: motionForItem(item, prompts),
+        imagePath: resolvePathForFs(item.imagePath),
+        videoPath: resolvePathForFs(item.videoPath),
+        options: {
+          screenshotsDir,
+          minVideoBytes: 50 * 1024,
+        },
+      });
 
-        const normalized = normalizeAdapterOutcome(outcome);
+      const normalized = normalizeAdapterOutcome(outcome);
+      await withStateLock(() => {
         const merged = mergeItemOutcome(item, normalized, itemNow);
         reconciledState.items[String(item.idx)] = merged;
         reconciledState.updatedAt = itemNow;
+        // writeVideoStateFile is atomic (temp file + rename); the mutex only
+        // serializes the read-modify-write of reconciledState across slots.
         writeVideoStateFile(statePath, reconciledState);
-        runExitCode = chooseBetterExitCode(runExitCode, normalized.exitCode);
-      } catch (err) {
-        const classified = classifyError(err);
+      });
+      runExitCode = chooseBetterExitCode(runExitCode, normalized.exitCode);
+    } catch (err) {
+      caught = err;
+      const classified = classifyError(err);
+      await withStateLock(() => {
         const merged = mergeItemOutcome(item, classified, itemNow);
         reconciledState.items[String(item.idx)] = merged;
         reconciledState.updatedAt = itemNow;
         writeVideoStateFile(statePath, reconciledState);
-        runExitCode = chooseBetterExitCode(runExitCode, classified.exitCode);
-      } finally {
-        if (page && typeof page.close === 'function') await page.close().catch(() => {});
-      }
+      });
+      runExitCode = chooseBetterExitCode(runExitCode, classified.exitCode);
+    } finally {
+      if (page && typeof page.close === 'function') await page.close().catch(() => {});
     }
+    activeController.recordOutcome({ result: classifyControllerResult(outcome, caught) });
+  }
+
+  try {
+    // Concurrency is bounded by the controller's live limit AND the requested
+    // maxInFlight. The default path runs maxInFlight=1, forcing the sequential
+    // fast-path below even when --limit selected several items.
+    const slotCount = Math.min(
+      validated.maxInFlight,
+      activeController.currentLimit(),
+      selection.selected.length
+    );
+
+    if (slotCount <= 1) {
+      // DEFAULT FAST-PATH: identical to the original sequential loop — same
+      // ordering, one item fully finished (page closed) before the next opens.
+      for (const item of selection.selected) {
+        await processItem(item);
+      }
+      return runExitCode;
+    }
+
+    // Concurrent scheduler: a fixed pool of slot-runners draining a shared
+    // queue. Each runner repeatedly shifts the next item and processes it.
+    const queue = selection.selected.slice();
+    const runner = async () => {
+      for (;;) {
+        const item = queue.shift();
+        if (!item) return;
+        await processItem(item);
+      }
+    };
+    const runners = [];
+    for (let i = 0; i < slotCount; i += 1) runners.push(runner());
+    await Promise.allSettled(runners);
 
     return runExitCode;
   } finally {
@@ -427,7 +549,8 @@ async function runSmokeWorker({
 async function main(argv = process.argv, deps = {}) {
   try {
     const parsed = parseCliArgs(argv);
-    const validated = validateSmokeConfig(parsed);
+    // Standalone CLI keeps smoke-phase semantics: single-flight only.
+    const validated = validateSmokeConfig({ ...parsed, smoke: true });
     return await runSmokeWorker({
       promptsPath: validated.promptsPath,
       limit: validated.limit,
@@ -459,7 +582,10 @@ if (require.main === module) {
 module.exports = {
   DEFAULT_STATE_PATH,
   chooseBetterExitCode,
+  classifyControllerResult,
   classifyError,
+  createNoopController,
+  createStateWriteMutex,
   determineNoWorkExitCode,
   deriveFlowDirs,
   exitCodeFromState,
