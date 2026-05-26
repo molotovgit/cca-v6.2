@@ -19,27 +19,38 @@ headful Chrome session, downloads each JPEG, zips them, and uploads the bundle
 back to the chapter's Notion page. A live dashboard at `:7777` reports
 progress. Multiple accounts rotate automatically as quotas exhaust.
 
-Video is a separate stabilization track. The repo now contains a Flow-first
-one-clip smoke path (`src/node/workers/submit_flow_videos.cjs` plus
-`src/node/video/*` helpers), but it is not wired into the default 5-stage image
-pipeline and still needs live Flow UI tuning before sequential or batch video
-runs.
+Video is an **opt-in** stabilization track. Phase 4 wires a Flow-first video
+stage into the per-chapter pipeline, gated by `CCA_ENABLE_VIDEO=1` and running
+**after** IMAGES (see Stage 4.5 below). It is best-effort and non-fatal: it never
+blocks or fails a chapter, image UPLOAD always proceeds, and generated MP4s land
+on disk under `data/videos/...` but are **not** uploaded to Notion yet. With the
+flag unset (the default), you get the unchanged 5-stage image pipeline. The video
+stage is still experimental and needs live Flow UI validation before sequential
+or batch video runs are considered ready.
 
 ---
 
-## 2. The 5-stage pipeline
+## 2. The pipeline stages
 
-Each chapter is processed in five sequential stages by `src/node/orchestrators/run_pipeline.cjs`.
-Completed stages are detected on disk and skipped on re-run, so the pipeline is
-idempotent and safe to retry.
+Each chapter is processed in five sequential stages by `src/node/orchestrators/run_pipeline.cjs`,
+plus an **optional, opt-in VIDEOS stage** between IMAGES and UPLOAD (enabled with
+`CCA_ENABLE_VIDEO=1`). Completed stages are detected on disk and skipped on
+re-run, so the pipeline is idempotent and safe to retry.
 
 ```
-  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-  │ 1. FETCH     │ → │ 2. REFINE    │ → │ 3. PROMPTS   │ → │ 4. IMAGES    │ → │ 5. UPLOAD    │
-  │  Notion API  │   │  ChatGPT     │   │  ChatGPT     │   │  Gemini CDP  │   │  Notion API  │
-  └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘
-        ~5s              ~50s              10-20 min          30-60 min           1-3 min
+                                                    [opt-in: CCA_ENABLE_VIDEO=1]
+                                                              ┌ · · · · · · · ┐
+  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   · ┌──────────┐ ·   ┌──────────┐
+  │ 1. FETCH │ → │ 2. REFINE│ → │ 3.PROMPTS│ → │ 4. IMAGES│ → · │  VIDEOS  │ · → │ 5. UPLOAD│
+  │ Notion   │   │ ChatGPT  │   │ ChatGPT  │   │ Gemini   │   · │ Flow/Veo │ ·   │ Notion   │
+  └──────────┘   └──────────┘   └──────────┘   └──────────┘   · └──────────┘ ·   └──────────┘
+      ~5s            ~50s          10-20 min      30-60 min     └ · · · · · · · ┘   1-3 min
 ```
+
+`FETCH → REFINE → PROMPTS → IMAGES → [VIDEOS, opt-in] → UPLOAD`. The VIDEOS stage
+is **non-fatal/best-effort** — it never blocks or fails the chapter, and UPLOAD
+runs regardless of video outcome. UPLOAD stays **image-only** for now; MP4s land
+on disk under `data/videos/...` but are not pushed to Notion yet.
 
 ### Stage 1 — FETCH
 
@@ -118,29 +129,46 @@ Skip condition: `data/images/.../ch{nn}/` already has 80 files.
 
 Skip condition: `.uploaded.json` marker present and references a still-valid Notion file.
 
-### Experimental video smoke path — Flow / Veo
+### Stage 4.5 — VIDEOS (optional, opt-in)
 
-**Status**: code-complete for one-clip smoke testing; live Flow validation still pending.
+**Status**: experimental / opt-in, live-validation pending. The one-clip
+download path is proven (MP4s download via the authenticated
+`media.getMediaUrlRedirect` URL), but a full live one-clip `generateOne`
+(generate → reload → download → saved) and start-frame attachment are not yet
+validated.
 
-The video path is intentionally separate from the image pipeline until it is
-observable and resumable in production. It uses:
+**Gate**: off by default. Set `CCA_ENABLE_VIDEO=1` to enable. When enabled, the
+stage runs **after** IMAGES and invokes
+`src/node/orchestrators/run_videos_autonomous.cjs` (Flow video via
+`labs.google/fx/tools/flow`, on the Gemini Chrome at CDP port 9223).
+
+**Contract**: the stage is **non-fatal/best-effort** — it never blocks or fails
+the chapter, and image UPLOAD always proceeds afterward. Generated MP4s are
+written under `data/videos/...`. UPLOAD stays **image-only** for now: videos are
+**not** uploaded to Notion yet (upload kept separate until video upload is
+verified).
+
+**Concurrency**: `CCA_VIDEO_MAX_IN_FLIGHT` (default 1, clamped to `[1,4]`)
+controls in-flight Flow clips. An AIMD (additive-increase / multiplicative-decrease)
+controller in `src/node/video/video_concurrency.cjs` backs off on failed tiles.
+Keep the default of 1 until concurrency is live-tuned.
+
+**Video-layer modules**:
 
 | Module | Role |
 |---|---|
+| `src/node/orchestrators/run_videos_autonomous.cjs` | Orchestrates the opt-in video stage: plans actionable items, dispatches the worker, aggregates exit codes (4 quota, 5 policy, 6 timeout), stops on terminal blockers. |
+| `src/node/video/video_concurrency.cjs` | AIMD in-flight controller; reads/clamps `CCA_VIDEO_MAX_IN_FLIGHT` to `[1,4]` and backs off on failed tiles. |
 | `src/node/video/video_state.cjs` | Atomic `data/.cca/video_state.json` read/write and prompt/image/video reconciliation. |
-| `src/node/video/video_errors.cjs` | Visible-page blocker classification for quota, subscription, policy, failed render, and login/session states. |
+| `src/node/video/video_errors.cjs` | Visible-page blocker classification and exit-code mapping (quota, subscription, policy, failed render, login/session). |
 | `src/node/video/video_download.cjs` | Provider-neutral MP4 download helper for `data:`, `blob:`, and authenticated HTTP(S) sources. |
-| `src/node/video/flow_adapter.cjs` | One-clip Flow adapter skeleton: open Flow/project, upload start frame, enter motion prompt, submit, classify blockers, save MP4. |
-| `src/node/workers/submit_flow_videos.cjs` | Smoke CLI for one item with `--limit 1 --max-in-flight 1`. |
+| `src/node/video/flow_adapter.cjs`, `src/node/video/flow_ui.cjs` | One-clip Flow adapter + UI selectors: open Flow/project, upload start frame, enter motion prompt, submit, classify blockers, save MP4. |
+| `src/node/video/video_batch.cjs` | Batch selection/ordering of clips for the stage. |
+| `src/node/workers/flow_probe.cjs` | Discovery harness — connect to live Flow Chrome (CDP 9223) to inspect current page state when selectors drift. |
 
-Smoke command:
-
-```bash
-node src/node/workers/submit_flow_videos.cjs <prompts.json> --limit 1 --max-in-flight 1
-```
-
-Do not raise concurrency above 1 until a live smoke run succeeds and failed-tile
-behavior is measured.
+For enabling, blockers/screenshots (`data/.cca/video_state.json`,
+`data/.cca/flow_screenshots/`), the `:9223` launch requirement, and exit codes,
+see the **Flow video** section in [TROUBLESHOOTING.md](../ops/TROUBLESHOOTING.md).
 
 ---
 
@@ -290,6 +318,7 @@ signed in (or `src/python/auth/auto_login.py` has) the sessions stay live for da
 - **Account state** — read from `accounts.json` + `.cca/active_accounts.json`.
 - **Stage progression** — derived per lesson (FETCH/REFINE/PROMPTS/IMAGES/UPLOAD ✓ checks).
 - **Recent log lines** — last 30 lines of the most-recently-modified file in `reports/batch_*.log`.
+- **Video panel** — shown only when `data/.cca/video_state.json` exists; reports saved/total, state counts, last blocker, and the last screenshot from the opt-in VIDEOS stage.
 
 The dashboard ONLY reads the filesystem. It does not orchestrate or kill
 anything. Safe to refresh aggressively.
