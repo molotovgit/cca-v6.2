@@ -51,3 +51,13 @@ test('classifyVisibleText recognizes Flow failed tile cards', () => {
 test('classifyVisibleText returns null when no blocker is visible', () => {
   assert.equal(classifyVisibleText('Generating your video. This can take a few minutes.'), null);
 });
+
+test('failed_tile stays advisory (failed_ui/EXIT_CODES.ui) even beside a fresh render', () => {
+  // The warning/Failed/99% card persists next to a real render, so the adapter
+  // treats this category as advisory and only fails after a reload + rescan.
+  // The classification itself must remain stable: failed_ui + EXIT_CODES.ui.
+  const hit = classifyVisibleText('warning Failed undo Reuse Prompt delete_forever Delete image 99% Generating');
+  assert.equal(hit.category, 'failed_tile');
+  assert.equal(hit.state, 'failed_ui');
+  assert.equal(hit.exitCode, EXIT_CODES.ui);
+});
