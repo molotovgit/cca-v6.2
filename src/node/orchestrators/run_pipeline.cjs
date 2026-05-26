@@ -34,12 +34,17 @@ function envInt(name, def) {
   const n = parseInt(v, 10);
   return Number.isNaN(n) ? def : n;
 }
+// Boolean flag from a CCA_* env var: '1' → true, anything else → `def`.
+function envBool(name, def) {
+  return process.env[name] === '1' ? true : def;
+}
 const CONFIG = {
   NOTION_URL: process.env.CCA_NOTION_URL || 'paste your notion link here',
   GRADE:      envInt('CCA_GRADE', 7),                          // 5–11
   LANG:       process.env.CCA_LANG    || 'uz',                 // 'uz' or 'ru'
   SUBJECT:    process.env.CCA_SUBJECT || 'jahon tarixi',       // fuzzy-matched in Notion
   CHAPTER:    envInt('CCA_CHAPTER', 1),                        // chapter number
+  ENABLE_VIDEO: envBool('CCA_ENABLE_VIDEO', false),           // opt-in video stage (after IMAGES)
 };
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -47,6 +52,12 @@ const { spawn, spawnSync } = require('child_process');
 const path      = require('path');
 const fs        = require('fs');
 const http      = require('http');
+
+const {
+  deriveVideosDir,
+  videoStageStatus,
+  buildVideoSpawnArgs,
+} = require('../video/video_stage.cjs');
 
 const REPO        = path.resolve(__dirname, '../../..');
 const CHATGPT_PORT = 9222;
@@ -332,6 +343,48 @@ async function stageImages(promptsJson) {
   if (after < total) throw new Error(`image stage finished with only ${after}/${total}`);
 }
 
+// OPT-IN video stage (CCA_ENABLE_VIDEO=1). Runs AFTER IMAGES, BEFORE UPLOAD.
+// NON-FATAL / best-effort: it must NEVER throw, exit, or block the UPLOAD stage.
+// It generates what it can via run_videos_autonomous.cjs, logs blockers, and
+// returns normally even on failure — the ENTIRE body is wrapped in try/catch.
+async function stageVideos(promptsJson) {
+  try {
+    if (!promptsJson) {
+      log('VIDEOS', 'non-fatal: no prompts.json resolved; continuing');
+      return;
+    }
+    const videosDir = deriveVideosDir(promptsJson);
+    const arr = JSON.parse(fs.readFileSync(promptsJson, 'utf-8'));
+    const total = Array.isArray(arr) ? arr.length : 0;
+    const status = videoStageStatus({ videosDir, total });
+    if (status.done) {
+      log('VIDEOS', `skip — ${status.have}/${total} mp4 already saved`);
+      return;
+    }
+    log('VIDEOS', `Flow — generating ${total - status.have} of ${total} videos (autonomous orchestrator)`);
+    // Mirror the IMAGES stage's Windows-safe cmd /c wrapper to avoid the
+    // depth-4 Node-to-Node spawn assertion (see stageImages for the why).
+    const { cmd, args } = buildVideoSpawnArgs(promptsJson);
+    const exitCode = await new Promise(resolve => {
+      const child = spawn(cmd, args, {
+        cwd: REPO,
+        stdio: 'inherit',
+        env: process.env,
+        shell: false,
+      });
+      child.on('exit', code => resolve(code ?? 1));
+      child.on('error', () => resolve(1));
+    });
+    const after = videoStageStatus({ videosDir, total });
+    if (exitCode !== 0) {
+      log('VIDEOS', `non-fatal: run_videos_autonomous.cjs exited code=${exitCode}; continuing`);
+    }
+    log('VIDEOS', `videos saved: ${after.have}/${total}`);
+  } catch (e) {
+    log('VIDEOS', `non-fatal: ${e && e.message ? e.message : e}; continuing`);
+  }
+}
+
 async function stageUpload() {
   // upload_images.py owns its own skip / idempotency logic (marker file +
   // sha256). Set CCA_SKIP_UPLOAD=1 to bypass entirely.
@@ -378,7 +431,11 @@ async function stageUpload() {
     { name: '2/5 REFINE',  fn: stageRefine  },
     { name: '3/5 PROMPTS', fn: stagePrompts },
     { name: '4/5 IMAGES',  fn: stageImages  },
-    { name: '5/5 UPLOAD',  fn: stageUpload  },
+    // OPT-IN video stage runs AFTER IMAGES, BEFORE UPLOAD (CCA_ENABLE_VIDEO=1).
+    // When enabled the flow is 6 stages and UPLOAD becomes 6/6; otherwise the
+    // 5-stage flow is byte-identical to before.
+    ...(CONFIG.ENABLE_VIDEO ? [{ name: '5/5 VIDEOS', fn: stageVideos }] : []),
+    { name: CONFIG.ENABLE_VIDEO ? '6/6 UPLOAD' : '5/5 UPLOAD', fn: stageUpload },
   ];
 
   let promptsJson = null;
