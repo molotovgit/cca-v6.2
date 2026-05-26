@@ -282,11 +282,10 @@ async function main(argv = process.argv, deps = {}) {
 
     const madeProgress = refreshedPlan.savedCount > savedBefore;
 
-    // Feed the AIMD controller evidence from this pass so its in-flight budget
-    // additively increases on progress and multiplicatively decreases on stall.
-    if (controller && typeof controller.recordOutcome === 'function') {
-      controller.recordOutcome({ result: madeProgress ? 'saved' : 'failed_tile' });
-    }
+    // AIMD outcomes are recorded PER-CLIP inside the worker (submit_flow_videos),
+    // which is the single source of recordOutcome. The orchestrator only owns the
+    // controller lifecycle and reads currentLimit() to size each pass — recording
+    // here too would double-count and corrupt the per-level failed-tile rate.
 
     if (!shouldContinue(refreshedPlan)) return refreshedPlan.exitCode;
 

@@ -391,12 +391,12 @@ test('controller persists across iterations and backs off on failed tiles', asyn
   fs.writeFileSync(promptsPath, JSON.stringify([{ idx: 1, image_prompt: 'demo' }]));
 
   // Stateful state: each pass fails the tile (no progress), so main stalls out
-  // after maxNoProgress cycles. main records a non-"saved" outcome each pass,
-  // and the injected controller halves its limit on each such outcome. We
-  // capture currentLimit() per worker call to assert the back-off carries
-  // forward across iterations. Note: failed_ui is the codebase's retryable
-  // failure state (a "failed tile"); plain "failed_tile" is treated as unknown
-  // and would not keep the loop actionable.
+  // after maxNoProgress cycles. The WORKER records a failed-tile outcome each
+  // pass (simulated by the injected runWorker below — in production
+  // submit_flow_videos records per clip), and the injected controller halves its
+  // limit on each such outcome. We capture currentLimit() per worker call to
+  // assert the back-off carries forward across iterations. Note: failed_ui is the
+  // codebase's retryable failure state (a "failed tile").
   const state = { items: { 1: { idx: 1, state: 'pending', attempts: 0 } } };
   const readState = async () => structuredClone(state);
 
@@ -418,6 +418,9 @@ test('controller persists across iterations and backs off on failed tiles', asyn
   const runWorker = async ({ controller: ctrl }) => {
     // Same controller instance is threaded into every iteration.
     observedLimits.push(ctrl.currentLimit());
+    // The worker (submit_flow_videos) is the single source of recordOutcome in
+    // production — one record per clip. Simulate one failed tile per pass.
+    ctrl.recordOutcome({ result: 'failed_tile' });
     state.items[1] = { ...state.items[1], attempts: state.items[1].attempts + 1, state: 'failed_ui' };
     return 1;
   };
