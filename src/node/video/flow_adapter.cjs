@@ -335,6 +335,119 @@ async function configureVideoMode(page, options = {}) {
   return true;
 }
 
+async function readBodyText(page) {
+  if (!page || typeof page.evaluate !== 'function') return '';
+  return page.evaluate(() => {
+    const bodyText = document.body ? document.body.innerText || '' : '';
+    return bodyText.replace(/\s+/g, ' ').trim();
+  }).catch(() => '');
+}
+
+async function verifyVideoMode(page, options = {}) {
+  if (options.verifyVideoMode === false) return true;
+
+  const bodyText = typeof options.readVideoModeText === 'function'
+    ? await options.readVideoModeText(page, options)
+    : await readBodyText(page);
+
+  const videoModeConfirmed = /video\s*[·.]\s*4s/i.test(bodyText);
+  const creditsMatch = bodyText.match(/generating will use (\d+) credits/i);
+  const credits = creditsMatch ? Number.parseInt(creditsMatch[1], 10) : null;
+
+  if (!videoModeConfirmed || credits === null || !(credits > 0)) {
+    throw new FlowAdapterError('Flow is still in image mode (0 credits) — video mode not selected', {
+      state: 'failed_ui',
+      exitCode: EXIT_CODES.ui,
+      stage: 'verify_video_mode',
+    });
+  }
+  return true;
+}
+
+async function findStartThumbnail(page, options = {}) {
+  if (typeof options.findStartThumbnail === 'function') {
+    return options.findStartThumbnail(page, options);
+  }
+  if (!page || typeof page.evaluate !== 'function') return null;
+  return page.evaluate(() => {
+    const visible = (el) => {
+      if (!el || !(el instanceof Element)) return false;
+      const style = window.getComputedStyle(el);
+      if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= 8 && rect.height >= 8 && rect.bottom >= 0 && rect.right >= 0;
+    };
+
+    const zones = Array.from(document.querySelectorAll('[role="button"], button, label, div'));
+    for (const zone of zones) {
+      if (!visible(zone)) continue;
+      const zoneLabel = [
+        zone.getAttribute('aria-label'),
+        zone.getAttribute('title'),
+        zone.textContent,
+      ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!/start/.test(zoneLabel)) continue;
+      const thumb = zone.querySelector('img[src], [style*="background-image"], video[src]');
+      if (thumb && visible(thumb)) {
+        return { kind: 'thumbnail', source: zoneLabel.slice(0, 120) };
+      }
+      const filenameMatch = zoneLabel.match(/[\w.-]+\.(?:png|jpe?g|webp|gif|bmp)\b/);
+      if (filenameMatch) {
+        return { kind: 'filename', text: filenameMatch[0] };
+      }
+    }
+    return null;
+  }).catch(() => null);
+}
+
+async function verifyStartFrameAttached(page, options = {}) {
+  if (options.verifyStartFrame === false) return true;
+  const thumbnail = await findStartThumbnail(page, options);
+  if (!thumbnail) {
+    await decorateAndThrow(page, options, 'verify_start_frame', 'start frame did not attach to the Start slot', {
+      state: 'failed_ui',
+      exitCode: EXIT_CODES.ui,
+    });
+  }
+  return thumbnail;
+}
+
+async function findCompletedTile(page, options = {}) {
+  if (typeof options.findCompletedTile === 'function') {
+    return options.findCompletedTile(page, options);
+  }
+  throw new FlowAdapterError('completed-tile/download selector unknown — needs live discovery (see flow_probe)', {
+    state: 'failed_download',
+    exitCode: EXIT_CODES.generic,
+    stage: 'await_completed_tile',
+  });
+}
+
+async function openVideosTab(page, options = {}) {
+  if (options.openVideosTab === false) return null;
+  if (typeof options.openVideosTab === 'function') {
+    return options.openVideosTab(page, options);
+  }
+  const clicked = await clickVisibleButton(page, /view videos videos|videocam|all media/i);
+  return clicked;
+}
+
+async function reloadAndRescan(page, options = {}) {
+  const projectUrl = typeof page.url === 'function' ? page.url() : null;
+  const targetUrl = options.projectUrl || projectUrl || resolveEntryUrl({
+    flowUrl: options.flowUrl || DEFAULT_FLOW_URL,
+  });
+
+  await page.goto(targetUrl, {
+    waitUntil: options.waitUntil || 'domcontentloaded',
+    timeout: Number.isFinite(options.gotoTimeoutMs) ? options.gotoTimeoutMs : 60_000,
+  });
+  await waitForFlowReady(page, options).catch(() => false);
+  await openVideosTab(page, options);
+  await sleep(Number.isFinite(options.rescanSettleMs) ? options.rescanSettleMs : 1500);
+  return findCompletedTile(page, options);
+}
+
 async function decorateAndThrow(page, options, stage, message, meta = {}) {
   const screenshotPath = await saveFailureScreenshot(page, {
     screenshotsDir: options.screenshotsDir,
@@ -514,7 +627,11 @@ async function hasActiveRenderProgress(page) {
   if (!page || typeof page.evaluate !== 'function') return false;
   return page.evaluate(() => {
     const bodyText = (document.body && document.body.innerText || '').replace(/\s+/g, ' ').trim();
-    const progressMatches = Array.from(bodyText.matchAll(/\b(\d{1,3})%\b/g))
+    // NOTE: a trailing \b after `%` is unsatisfiable (`%` is non-word, the next
+    // char is space/end which is also non-word), so the old /\b(\d{1,3})%\b/g
+    // NEVER matched "7%" or "99%" — the failed-tile grace check then never saw
+    // live progress and threw on the "Failed … 99%" card mid-render.
+    const progressMatches = Array.from(bodyText.matchAll(/(\d{1,3})\s*%/g))
       .map(match => Number.parseInt(match[1], 10))
       .filter(value => Number.isFinite(value));
     return progressMatches.some(value => value >= 0 && value < 100)
@@ -548,6 +665,12 @@ async function waitForCompletion(page, options = {}) {
       await sleep(pollMs);
       continue;
     }
+    // The Flow `failed`/`warning … 99%` card is advisory, not terminal: it can
+    // persist next to a fresh render. Stop polling the live view and let the
+    // caller reload + rescan the Videos tab before concluding a real failure.
+    if (blocker && blocker.category === 'failed_tile') {
+      return { advisory: 'failed_tile', target: null };
+    }
     if (blocker) {
       const screenshotPath = await saveFailureScreenshot(page, {
         screenshotsDir: options.screenshotsDir,
@@ -566,16 +689,65 @@ async function waitForCompletion(page, options = {}) {
     }
 
     const target = await findDownloadTarget(page, options);
-    if (target) return target;
+    if (target) return { advisory: null, target };
 
     await sleep(pollMs);
+  }
+
+  return { advisory: 'timeout', target: null };
+}
+
+async function awaitCompletedTile(page, options = {}) {
+  // Phase 1: poll the live generating view for a brief render window.
+  const live = await waitForCompletion(page, options);
+  if (live && live.target) return live.target;
+
+  // Phase 2: trust nothing from the live view. Reload the project, open the
+  // Videos/All Media tab, and rescan for a real completed tile. Repeat a few
+  // times because Flow often renders only after a reload.
+  const reloadAttempts = Number.isFinite(options.reloadAttempts) && options.reloadAttempts > 0
+    ? options.reloadAttempts
+    : 2;
+  const reloadDelayMs = Number.isFinite(options.reloadDelayMs) && options.reloadDelayMs >= 0
+    ? options.reloadDelayMs
+    : 15_000;
+
+  let lastErr = null;
+  for (let attempt = 0; attempt < reloadAttempts; attempt += 1) {
+    if (attempt > 0) await sleep(reloadDelayMs);
+    try {
+      const tile = await reloadAndRescan(page, options);
+      if (tile) return tile;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  if (lastErr instanceof FlowAdapterError) {
+    const screenshotPath = await saveFailureScreenshot(page, {
+      screenshotsDir: options.screenshotsDir,
+      item: options.item,
+      stage: lastErr.stage || 'await_completed_tile',
+    });
+    lastErr.screenshotPath = lastErr.screenshotPath || screenshotPath;
+    throw lastErr;
   }
 
   const screenshotPath = await saveFailureScreenshot(page, {
     screenshotsDir: options.screenshotsDir,
     item: options.item,
-    stage: 'wait_timeout',
+    stage: live && live.advisory === 'failed_tile' ? 'await_completed_tile' : 'wait_timeout',
   });
+
+  if (live && live.advisory === 'failed_tile') {
+    throw new FlowAdapterError('Flow render failed — no completed tile after reload + Videos-tab rescan', {
+      state: 'failed_ui',
+      exitCode: EXIT_CODES.ui,
+      stage: 'await_completed_tile',
+      screenshotPath,
+    });
+  }
+
   throw new FlowAdapterError('timed out waiting for Flow to finish rendering', {
     state: 'failed_timeout',
     exitCode: EXIT_CODES.timeout,
@@ -675,6 +847,7 @@ async function generateOne({
     ? options.classifyPage
     : classifyPage;
   await configureVideoMode(page, options);
+  await verifyVideoMode(page, { ...options, item });
   const initialBlocker = await detectBlocker(page, classifyPageFn);
   if (initialBlocker && !shouldIgnoreBlocker(initialBlocker, ['failed_tile'])) {
     const screenshotPath = await saveFailureScreenshot(page, {
@@ -691,6 +864,7 @@ async function generateOne({
   }
 
   await uploadStartFrame(page, imagePath, { ...options, item }, 'upload_start_frame');
+  await verifyStartFrameAttached(page, { ...options, item });
   const postUploadBlocker = await detectBlocker(page, classifyPageFn);
   if (postUploadBlocker && !shouldIgnoreBlocker(postUploadBlocker, ['failed_tile'])) {
     const screenshotPath = await saveFailureScreenshot(page, {
@@ -709,7 +883,7 @@ async function generateOne({
   await enterMotionPrompt(page, motion, { ...options, item }, 'enter_motion');
   await submitGeneration(page, { ...options, item }, 'submit_generation');
 
-  const target = await waitForCompletion(page, { ...options, item, classifyPage: classifyPageFn });
+  const target = await awaitCompletedTile(page, { ...options, item, classifyPage: classifyPageFn });
   const helper = resolveDownloadHelper(options);
   if (!helper) {
     const screenshotPath = await saveFailureScreenshot(page, {
@@ -756,6 +930,7 @@ module.exports = {
   PROMPT_TEXTS,
   SUBMIT_TEXTS,
   UPLOAD_TEXTS,
+  awaitCompletedTile,
   buildScreenshotPath,
   clickVisibleButton,
   configureVideoMode,
@@ -763,12 +938,19 @@ module.exports = {
   detectBlocker,
   enterMotionPrompt,
   findClickableByText,
+  findCompletedTile,
   findDownloadTarget,
   findStartFrameDropTarget,
+  findStartThumbnail,
   findSubmitButton,
   findTextInputBox,
   generateOne,
   hasActiveRenderProgress,
+  openVideosTab,
+  readBodyText,
+  reloadAndRescan,
+  verifyStartFrameAttached,
+  verifyVideoMode,
   includesAnyText,
   normalizeDownloadResult,
   normalizeText,
