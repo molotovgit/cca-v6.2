@@ -46,13 +46,14 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - Keep changes scoped; do not refactor unrelated parts while stabilizing the pipeline.
 
 ## Next Action Queue
-1. Run one live Flow smoke test with `node src/node/workers/submit_flow_videos.cjs <prompts.json> --limit 1 --max-in-flight 1`.
-2. Tune `flow_adapter.cjs` selectors and `video_errors.cjs` blocker text against the real Flow UI.
-3. Confirm one image becomes one saved MP4 under `data/videos/...` and `data/.cca/video_state.json` records `saved`.
-4. Run a small sequential Flow batch with `node src/node/orchestrators/run_videos_autonomous.cjs <prompts.json> --limit <N> --max-attempts 3 --max-no-progress 3`.
-5. Add the account-rotation hook after the real Flow quota/credit blocker shape is known.
-6. Do not start Phase 3 concurrency until the one-clip smoke and sequential batch path are stable against the live Flow UI.
-7. Keep the working image pipeline intact while Flow video is implemented.
+1. Patch Flow post-submit handling: after render progress/stale failed text, reload or rescan All Media before declaring failure.
+2. Prove the source image is actually attached as the Flow start frame, not merely that prompt-only videos render.
+3. Implement completed-tile discovery and MP4 download from Flow after reload.
+4. Confirm one image becomes one saved MP4 under `data/videos/...` and `data/.cca/video_state.json` records `saved`.
+5. Run a small sequential Flow batch with `node src/node/orchestrators/run_videos_autonomous.cjs <prompts.json> --limit <N> --max-attempts 3 --max-no-progress 3`.
+6. Add the account-rotation hook after the real Flow quota/credit blocker shape is known.
+7. Do not start Phase 3 concurrency until the one-clip smoke and sequential batch path are stable against the live Flow UI.
+8. Keep the working image pipeline intact while Flow video is implemented.
 
 ## Implementation Log
 - 2026-05-26: Started Phase 0 implementation. Work is split into recoverable slices: video state helpers, submitter failure exits, saver idle timeout, and focused Node tests. Sub-agents should work in isolated worktrees and avoid image pipeline changes.
@@ -72,7 +73,8 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - 2026-05-26: Phase 2 autonomous orchestrator checkpoint complete. `src/node/orchestrators/run_videos_autonomous.cjs` loops `submit_flow_videos` one clip at a time, re-reads `video_state`, honors `--limit`, `--max-attempts`, and `--max-no-progress`, and exits with stable codes for completion, quota, policy, missing assets, retry exhaustion, and no-progress timeout.
 - 2026-05-26: Phase 2 docs/memory checkpoint. Batch helper and orchestrator scaffolding are code-complete with focused tests, but production readiness still depends on one live Flow smoke pass and one small live sequential batch pass.
 - 2026-05-26: Phase 2 workspace cleanup checkpoint. Closed Phase 2 sub-agents and removed temporary worktrees plus `agent/phase2-*` branches. Local Obsidian state, Ruflo AgentDB runtime files, and `cca_v4.zip` remain uncommitted workspace artifacts.
-- 2026-05-26: Live Flow smoke checkpoint. Created ignored smoke data at `data/prompts/smoke/flow-smoke.json` and `data/images/smoke/flow-smoke/001-intro.png`, connected to Flow project `a14d1a43-d896-4da3-a84b-ebb5195b1b55`, and hardened `flow_adapter.cjs` for live UI realities: project-ready wait, Video/Frames/16:9/1x/4s mode setup, Flow start-frame drop-zone fallback, prompt textbox detection, submit-button ranking, and stale failed-tile handling. The live run reached an actual Flow video tile and progressed to `7%`, then Flow reported a provider failed render tile. No MP4 was saved.
+- 2026-05-26: Live Flow smoke checkpoint. Created ignored smoke data at `data/prompts/smoke/flow-smoke.json` and `data/images/smoke/flow-smoke/001-intro.png`, connected to Flow project `a14d1a43-d896-4da3-a84b-ebb5195b1b55`, and hardened `flow_adapter.cjs` for live UI realities: project-ready wait, Video/Frames/16:9/1x/4s mode setup, Flow start-frame drop-zone fallback, prompt textbox detection, submit-button ranking, and stale failed-tile handling. The worker reached an actual Flow video tile and progress, but incorrectly marked the run failed before rediscovering completed renders.
+- 2026-05-26: Live Flow smoke correction from user observation. After reloading Flow, two generated videos appeared in All Media, so Flow did render. The current automation gap is post-submit discovery/download and state reconciliation after reload. The start-frame image path is still not proven because the visible completed videos looked prompt-generated, so the next code slice must verify actual image-to-video attachment before treating the smoke as complete.
 
 ## Index Links
 - [MEMORY_INDEX.md](MEMORY_INDEX.md)

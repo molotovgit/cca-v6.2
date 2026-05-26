@@ -212,10 +212,14 @@ Live smoke result on 2026-05-26:
 - The worker connected to a real Flow project and selected `Video · 4s`,
   `Frames`, `16:9`, and `1x`.
 - The worker reached a live video render tile and observed progress to `7%`.
-- Flow then reported a failed render tile; no MP4 was saved.
-- Next tuning target is not basic CDP connection or generic upload discovery. It
-  is isolating why the Flow render fails after start-frame submission and then
-  validating MP4 download on a successful tile.
+- User observed after reload that two generated videos appeared in All Media, so
+  the worker's failed-tile result was a false negative from the live polling
+  view, not proof that Flow failed to render.
+- No MP4 was saved by automation yet.
+- The visible completed videos appeared prompt-generated, so the start-frame
+  image attachment is not proven.
+- Next tuning target is post-submit reload/rescan, completed-tile MP4 download,
+  and proof that the supplied source image is actually used as the start frame.
 
 ### Phase 2: Sequential Batch
 

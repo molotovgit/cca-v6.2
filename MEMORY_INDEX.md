@@ -41,8 +41,9 @@ Obsidian-friendly entry point for the workspace memory layer.
 - `src/node/video/video_batch.cjs` summarizes batch progress, selects retryable items, caps exhausted retries, detects no-progress loops, and chooses aggregate exit codes.
 - `src/node/orchestrators/run_videos_autonomous.cjs` is the sequential batch CLI: `node src/node/orchestrators/run_videos_autonomous.cjs <prompts.json> --limit <N> --max-attempts 3 --max-no-progress 3`.
 - `submit_flow_videos.cjs` already exposes a programmatic worker API and supports injected adapter/browser dependencies for tests; no worker API patch was needed in Phase 2.
-- Live Flow smoke reached a real `Video · 4s` render tile and progressed to `7%`, then Flow returned a failed render tile. The automation now reaches the provider render boundary, but no MP4 has been saved yet.
-- Phase 2 is code-scaffolded, but not production-ready until one live Flow clip saves successfully and a small sequential Flow batch is verified.
+- Live Flow smoke reached real Flow video generation. User observed after reload that two generated videos appeared in All Media, so the worker's failed-tile result was a false negative caused by post-submit discovery/reload handling.
+- The remaining smoke gap is completed-tile rediscovery, MP4 download, and proof that the source image is attached as the start frame rather than producing prompt-only videos.
+- Phase 2 is code-scaffolded, but not production-ready until one image-to-video Flow clip saves successfully and a small sequential Flow batch is verified.
 
 ## Current Video Decision
 - Production video target is Google Flow / Veo through `labs.google/fx/tools/flow`.
