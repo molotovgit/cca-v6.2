@@ -12,6 +12,8 @@ const http = require('http');
 const fs   = require('fs');
 const path = require('path');
 
+const { summarizeVideoForDashboard } = require('../video/video_dashboard.cjs');
+
 const REPO = path.resolve(__dirname, '../../..');
 const PORT = 7777;
 
@@ -343,6 +345,11 @@ function snapshot() {
     tab_map:       safeJSON(path.join(REPO, 'data', '.cca', 'tab_map.json'), null),
   };
 
+  // Video pipeline (Flow) — additive panel. Reads data/.cca/video_state.json
+  // and projects a compact UI summary. null when absent / not enabled.
+  const videoState = safeJSON(path.join(REPO, 'data', '.cca', 'video_state.json'), null);
+  out.video = summarizeVideoForDashboard(videoState);
+
   // Account rotation status — read data/accounts.json + data/.cca/active_accounts.json
   // and produce a per-provider summary the UI can render.
   const accountsJson    = safeJSON(path.join(REPO, 'data', 'accounts.json'), null);
@@ -609,6 +616,19 @@ body { background: radial-gradient(circle at 10% 0%, #16203a 0%, #0a0e1a 60%) fi
     </div>
   </div>
 
+  <!-- ─── Video (Flow) panel — additive ─── -->
+  <div class="card" id="video-card" style="margin-top:22px;">
+    <h3 style="display:flex; align-items:center; gap:14px;">
+      ◆ Video (Flow)
+      <span style="font-weight:400; color:var(--dim); font-size:11px;">
+        (video render progress + blockers · data/.cca/video_state.json)
+      </span>
+    </h3>
+    <div id="video-body">
+      <div class="empty">video: idle / not enabled</div>
+    </div>
+  </div>
+
   <div class="grid cards-2" style="margin-top:22px;">
     <div class="card">
       <h3>◆ Recent log</h3>
@@ -717,6 +737,105 @@ function renderAccounts(accounts) {
   }
 }
 
+function renderVideoPanel(v) {
+  const body = document.getElementById('video-body');
+  if (!body) return;
+  body.innerHTML = '';
+  if (!v) {
+    body.appendChild(el('div', 'empty', 'video: idle / not enabled'));
+    return;
+  }
+
+  // saved / total progress
+  const total = v.totalCount || 0;
+  const saved = v.savedCount || 0;
+  const pct = total ? Math.round(saved / total * 100) : 0;
+
+  const prog = el('div');
+  prog.innerHTML =
+    '<div class="progress-num">' +
+      '<span class="big">' + saved + '</span>' +
+      '<span class="small">/ ' + total + ' videos saved</span>' +
+    '</div>' +
+    '<div class="progress-bar"><div class="fill" style="width:' + pct + '%"></div></div>';
+  body.appendChild(prog);
+
+  // per-state counts as pills
+  const counts = v.counts || {};
+  const keys = Object.keys(counts).sort();
+  const chips = el('div', 'lesson-list');
+  if (keys.length === 0) {
+    chips.appendChild(el('span', 'lesson-pill', 'no items'));
+  } else {
+    keys.forEach(state => {
+      let cls = 'lesson-pill';
+      if (state === 'saved') cls += ' done';
+      else if (/^blocked_|^failed_/.test(state)) cls += ' active';
+      // state names come from a fixed enum; counts are numbers — use textContent.
+      const pill = el('span', cls);
+      pill.textContent = state + ' · ' + counts[state];
+      chips.appendChild(pill);
+    });
+  }
+  body.appendChild(chips);
+
+  // summary metrics
+  const metrics = el('div');
+  metrics.style.cssText = 'margin-top:12px;';
+  metrics.innerHTML =
+    '<div class="metric-row"><span class="label">active (rendering)</span><span class="val ' + (v.active ? 'warn' : 'ok') + '">' + (v.active || 0) + '</span></div>' +
+    '<div class="metric-row"><span class="label">retryable</span><span class="val ' + (v.retryable ? 'warn' : 'ok') + '">' + (v.retryable || 0) + '</span></div>' +
+    '<div class="metric-row"><span class="label">blocked</span><span class="val ' + (v.blocked ? 'err' : 'ok') + '">' + (v.blocked || 0) + '</span></div>' +
+    '<div class="metric-row"><span class="label">failed</span><span class="val ' + (v.failed ? 'err' : 'ok') + '">' + (v.failed || 0) + '</span></div>';
+  body.appendChild(metrics);
+
+  // last blocker — error text is freeform, so render it via textContent.
+  const lb = v.lastBlocker;
+  const blocker = el('div');
+  blocker.style.cssText = 'margin-top:12px;';
+  if (lb) {
+    const head = el('div');
+    head.style.cssText = 'font-size:10px; color:var(--err); font-weight:700; letter-spacing:0.4px; margin-bottom:4px;';
+    head.textContent = '⛔ LAST BLOCKER — #' + (lb.idx != null ? lb.idx : '?') + ' · ' + (lb.state || '—');
+    const msg = el('div');
+    msg.style.cssText = 'font-size:12px; color:var(--dim);';
+    msg.textContent = fmt(lb.lastError || '(no error message)');
+    blocker.appendChild(head);
+    blocker.appendChild(msg);
+  } else {
+    const ok = el('div');
+    ok.style.cssText = 'font-size:12px; color:var(--ok);';
+    ok.textContent = '✓ no blockers';
+    blocker.appendChild(ok);
+  }
+  body.appendChild(blocker);
+
+  // last screenshot path — freeform path, render via textContent.
+  const shot = el('div');
+  shot.style.cssText = 'margin-top:10px; font-size:11px; color:var(--dim); word-break:break-all;';
+  const shotLabel = el('span', 'label');
+  shotLabel.textContent = 'last screenshot: ';
+  const shotVal = el('span');
+  if (v.lastScreenshot) {
+    shotVal.className = 'val';
+    shotVal.textContent = fmt(v.lastScreenshot);
+  } else {
+    shotVal.textContent = '—';
+  }
+  shot.appendChild(shotLabel);
+  shot.appendChild(shotVal);
+  body.appendChild(shot);
+
+  // updated-at
+  if (v.updatedAt) {
+    const upd = el('div');
+    upd.style.cssText = 'margin-top:6px; font-size:10px; color:var(--dim);';
+    const ts = typeof v.updatedAt === 'number' ? new Date(v.updatedAt).toLocaleString() : v.updatedAt;
+    upd.textContent = 'updated: ' + ts;
+    body.appendChild(upd);
+  }
+}
+
 function renderImageGrid(saved, pending, total) {
   const grid = document.getElementById('image-grid');
   grid.innerHTML = '';
@@ -779,6 +898,9 @@ async function tick() {
 
   // Account rotation panel
   renderAccounts(s.accounts);
+
+  // Video (Flow) panel — additive; null → "idle / not enabled"
+  renderVideoPanel(s.video);
 
   // Image grid
   const total = (s.diskCounts && s.diskCounts.promptsCount) || 80;
