@@ -124,7 +124,7 @@ def main():
 
     subject_slug = slugify(args.subject)
     chapter_slug = slugify(clean_chapter_title(result["chapter_title"]))
-    out_dir = REPO / "data" / "chapters" / f"g{args.grade}-{lang}" / subject_slug
+    out_dir = REPO / "data" / "chapters" / f"g{args.grade}-{args.lang}" / subject_slug
     out_dir.mkdir(parents=True, exist_ok=True)
 
     out_path = out_dir / f"ch{args.chapter:02d}-{chapter_slug}.md"

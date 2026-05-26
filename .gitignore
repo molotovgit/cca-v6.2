@@ -9,7 +9,7 @@ launch.bat
 launch_*.bat
 !deploy/launch_template.bat
 # Local diagnostic / one-off test scripts
-test_*.py
+/test_*.py
 
 # Python
 __pycache__/
@@ -55,6 +55,9 @@ _*.py
 _*.txt
 _*.bat
 _*.log
+# Package markers are real source, not diagnostic artifacts — keep them tracked
+# (the _*.py rule above otherwise matches __init__.py).
+!**/__init__.py
 
 # Per-host wrapper bat created by deploy/launch_template.bat caller
 wrapper.bat
@@ -72,4 +75,3 @@ Thumbs.db
 .claude/
 .claude-flow/
 .swarm/
-tests/
