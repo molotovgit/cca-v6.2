@@ -41,6 +41,13 @@ test('classifyVisibleText recognizes failed render tiles', () => {
   assert.equal(hit.exitCode, EXIT_CODES.ui);
 });
 
+test('classifyVisibleText recognizes Flow failed tile cards', () => {
+  const hit = classifyVisibleText('warning Failed undo Reuse Prompt delete_forever Delete image 99%');
+  assert.equal(hit.category, 'failed_tile');
+  assert.equal(hit.state, 'failed_ui');
+  assert.equal(hit.exitCode, EXIT_CODES.ui);
+});
+
 test('classifyVisibleText returns null when no blocker is visible', () => {
   assert.equal(classifyVisibleText('Generating your video. This can take a few minutes.'), null);
 });

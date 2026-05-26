@@ -55,6 +55,8 @@ const BLOCKER_PATTERNS = [
     patterns: [
       /\bfailed\b.{0,60}\b(tile|generation|render|video|clip)\b/i,
       /\b(generation|render|video|clip)\b.{0,60}\bfailed\b/i,
+      /\bfailed\b.{0,120}\b(reuse prompt|delete image|99%)\b/i,
+      /\bwarning\b.{0,40}\bfailed\b/i,
       /\bsomething went wrong\b/i,
     ],
   },

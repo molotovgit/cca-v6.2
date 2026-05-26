@@ -11,8 +11,8 @@ const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_POLL_MS = 4000;
 const DOWNLOAD_HELPER_NAMES = ['downloadMp4ToFile', 'downloadVideo', 'downloadMp4', 'saveVideo', 'saveMp4'];
 
-const UPLOAD_TEXTS = ['upload', 'upload image', 'add files', 'add image', 'attach', 'import'];
-const PROMPT_TEXTS = ['prompt', 'motion', 'describe', 'describe your video', 'enter a prompt'];
+const UPLOAD_TEXTS = ['upload', 'upload image', 'add media', 'add files', 'add image', 'attach', 'import'];
+const PROMPT_TEXTS = ['prompt', 'motion', 'describe', 'describe your video', 'enter a prompt', 'what do you want to create'];
 const SUBMIT_TEXTS = ['generate', 'create', 'send', 'submit', 'run'];
 const DOWNLOAD_TEXTS = ['download', 'save', 'export'];
 
@@ -101,6 +101,11 @@ async function detectBlocker(page, classifyPageFn = classifyPage) {
   return Promise.resolve(classifyPageFn(page)).catch(() => null);
 }
 
+function shouldIgnoreBlocker(blocker, ignoredCategories = []) {
+  if (!blocker || !Array.isArray(ignoredCategories) || ignoredCategories.length === 0) return false;
+  return ignoredCategories.includes(blocker.category);
+}
+
 function normalizeDownloadResult(result, fallbackPath) {
   if (!result) return fallbackPath || null;
   if (typeof result === 'string') return result;
@@ -172,7 +177,7 @@ async function findClickableByText(page, texts, {
 }
 
 async function findTextInputBox(page, texts, {
-  selectors = 'textarea, [contenteditable="true"], input:not([type="hidden"])',
+  selectors = 'textarea, [contenteditable="true"], [role="textbox"], input:not([type="hidden"])',
   exact = false,
 } = {}) {
   return page.evaluate((query) => {
@@ -212,8 +217,122 @@ async function findTextInputBox(page, texts, {
   }, { texts, selectors, exact }).catch(() => null);
 }
 
+async function waitForFlowReady(page, options = {}) {
+  if (!page || typeof page.waitForFunction !== 'function') return false;
+  const timeout = Number.isFinite(options.readyTimeoutMs) ? options.readyTimeoutMs : 120_000;
+  await page.waitForFunction(() => {
+    const bodyText = (document.body && document.body.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!bodyText || bodyText === 'loading...' || bodyText === 'loading') return false;
+    return bodyText.includes('what do you want to create')
+      || bodyText.includes('add media')
+      || bodyText.includes('start creating')
+      || bodyText.includes('create');
+  }, { timeout });
+  await sleep(Number.isFinite(options.readySettleMs) ? options.readySettleMs : 1500);
+  return true;
+}
+
 async function findFileInput(page) {
   return page.$('input[type="file"]').catch(() => null);
+}
+
+async function findStartFrameDropTarget(page) {
+  if (!page || typeof page.evaluate !== 'function') return null;
+  return page.evaluate(() => {
+    const nodes = Array.from(document.querySelectorAll('[role="button"], button, label'));
+    const visible = (el) => {
+      if (!el || !(el instanceof Element)) return false;
+      const style = window.getComputedStyle(el);
+      if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= 100 && rect.height >= 100 && rect.bottom >= 0 && rect.right >= 0;
+    };
+
+    const candidates = [];
+    for (const el of nodes) {
+      if (!visible(el)) continue;
+      const label = [
+        el.getAttribute('aria-label'),
+        el.getAttribute('placeholder'),
+        el.getAttribute('title'),
+        el.textContent,
+      ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+      const rect = el.getBoundingClientRect();
+      if (label && !/start|frame|drop|media|upload/.test(label)) continue;
+      candidates.push({
+        text: label.slice(0, 240),
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      });
+    }
+
+    candidates.sort((a, b) => a.x - b.x || b.width * b.height - a.width * a.height);
+    return candidates[0] || null;
+  }).catch(() => null);
+}
+
+async function clickVisibleButton(page, matcher) {
+  if (!page || typeof page.evaluate !== 'function' || typeof page.mouse?.click !== 'function') return null;
+  const target = await page.evaluate((source) => {
+    const pattern = new RegExp(source, 'i');
+    const nodes = Array.from(document.querySelectorAll('button, [role="button"], a'));
+    const visible = (el) => {
+      if (!el || !(el instanceof Element)) return false;
+      const style = window.getComputedStyle(el);
+      if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= 4 && rect.height >= 4 && rect.bottom >= 0 && rect.right >= 0;
+    };
+
+    const candidates = [];
+    for (const el of nodes) {
+      if (!visible(el)) continue;
+      const label = [
+        el.getAttribute('aria-label'),
+        el.getAttribute('placeholder'),
+        el.getAttribute('title'),
+        el.textContent,
+      ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+      if (!pattern.test(label)) continue;
+      const rect = el.getBoundingClientRect();
+      candidates.push({
+        text: label.slice(0, 240),
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+        area: Math.round(rect.width * rect.height),
+      });
+    }
+    candidates.sort((a, b) => b.area - a.area);
+    return candidates[0] || null;
+  }, matcher.source || String(matcher)).catch(() => null);
+
+  if (!target) return null;
+  await page.mouse.click(target.x, target.y, { delay: 20 });
+  return target;
+}
+
+async function configureVideoMode(page, options = {}) {
+  if (options.configureVideoMode === false) return false;
+  const settle = Number.isFinite(options.modeSettleMs) ? options.modeSettleMs : 600;
+
+  const opened = await clickVisibleButton(page, /(?:nano banana|video\s*[·.]|crop_16_9|omni flash)/i);
+  if (!opened) return false;
+  await sleep(settle);
+
+  const steps = [
+    /play_circle\s*video|video/i,
+    /crop_free\s*frames|frames/i,
+    /crop_16_9\s*16:9|16:9/i,
+    /^1x$/i,
+    /^4s$/i,
+  ];
+  for (const step of steps) {
+    const clicked = await clickVisibleButton(page, step);
+    if (clicked) await sleep(settle);
+  }
+  return true;
 }
 
 async function decorateAndThrow(page, options, stage, message, meta = {}) {
@@ -234,7 +353,7 @@ async function uploadStartFrame(page, imagePath, options, stage = 'upload_start_
 
   const uploadBox = typeof options.findUploadControl === 'function'
     ? await options.findUploadControl(page, options)
-    : await findClickableByText(page, UPLOAD_TEXTS);
+    : (await findClickableByText(page, UPLOAD_TEXTS) || await findStartFrameDropTarget(page));
 
   if (!uploadBox) {
     await decorateAndThrow(page, options, stage, 'could not find an upload control', {
@@ -279,7 +398,7 @@ async function enterMotionPrompt(page, motion, options, stage = 'enter_motion') 
 async function submitGeneration(page, options, stage = 'submit_generation') {
   const submitBox = typeof options.findSubmitControl === 'function'
     ? await options.findSubmitControl(page, options)
-    : await findClickableByText(page, SUBMIT_TEXTS, { exact: false });
+    : await findSubmitButton(page, SUBMIT_TEXTS);
 
   if (!submitBox) {
     await decorateAndThrow(page, options, stage, 'could not find a submit button', {
@@ -290,6 +409,52 @@ async function submitGeneration(page, options, stage = 'submit_generation') {
 
   await page.mouse.click(submitBox.x, submitBox.y, { delay: 20 });
   return submitBox;
+}
+
+async function findSubmitButton(page, texts = SUBMIT_TEXTS) {
+  if (!page || typeof page.evaluate !== 'function') return null;
+  return page.evaluate((query) => {
+    const { texts } = query;
+    const wanted = texts.map(t => String(t).toLowerCase());
+    const nodes = Array.from(document.querySelectorAll('button, [role="button"], a'));
+
+    const visible = (el) => {
+      if (!el || !(el instanceof Element)) return false;
+      const style = window.getComputedStyle(el);
+      if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= 4 && rect.height >= 4 && rect.bottom >= 0 && rect.right >= 0;
+    };
+
+    const candidates = [];
+    for (const el of nodes) {
+      if (!visible(el)) continue;
+      const label = [
+        el.getAttribute('aria-label'),
+        el.getAttribute('placeholder'),
+        el.getAttribute('title'),
+        el.textContent,
+      ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!label) continue;
+      if (label.includes('add media') || label.includes('add_2')) continue;
+      if (!wanted.some(needle => label.includes(needle)) && !label.includes('arrow_forward')) continue;
+      const rect = el.getBoundingClientRect();
+      let score = 0;
+      if (label.includes('arrow_forward')) score += 100;
+      if (label.includes('generate')) score += 60;
+      if (label.includes('create')) score += 40;
+      if (rect.left > window.innerWidth / 2) score += 10;
+      candidates.push({
+        text: label.slice(0, 240),
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+        score,
+      });
+    }
+
+    candidates.sort((a, b) => b.score - a.score || b.x - a.x);
+    return candidates[0] || null;
+  }, { texts }).catch(() => null);
 }
 
 async function findDownloadTarget(page, options = {}) {
@@ -345,6 +510,18 @@ async function findDownloadTarget(page, options = {}) {
   }, DOWNLOAD_TEXTS).catch(() => null);
 }
 
+async function hasActiveRenderProgress(page) {
+  if (!page || typeof page.evaluate !== 'function') return false;
+  return page.evaluate(() => {
+    const bodyText = (document.body && document.body.innerText || '').replace(/\s+/g, ' ').trim();
+    const progressMatches = Array.from(bodyText.matchAll(/\b(\d{1,3})%\b/g))
+      .map(match => Number.parseInt(match[1], 10))
+      .filter(value => Number.isFinite(value));
+    return progressMatches.some(value => value >= 0 && value < 100)
+      || /\b(generating|rendering|creating)\b/i.test(bodyText);
+  }).catch(() => false);
+}
+
 async function waitForCompletion(page, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
     ? options.timeoutMs
@@ -353,12 +530,24 @@ async function waitForCompletion(page, options = {}) {
     ? options.pollMs
     : DEFAULT_POLL_MS;
   const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  const failedTileGraceMs = Number.isFinite(options.failedTileGraceMs)
+    ? options.failedTileGraceMs
+    : 30_000;
   const classifyPageFn = typeof options.classifyPage === 'function'
     ? options.classifyPage
     : classifyPage;
 
   while (Date.now() < deadline) {
     const blocker = await detectBlocker(page, classifyPageFn);
+    if (
+      blocker
+      && blocker.category === 'failed_tile'
+      && (Date.now() - startedAt < failedTileGraceMs || await hasActiveRenderProgress(page))
+    ) {
+      await sleep(pollMs);
+      continue;
+    }
     if (blocker) {
       const screenshotPath = await saveFailureScreenshot(page, {
         screenshotsDir: options.screenshotsDir,
@@ -465,12 +654,29 @@ async function generateOne({
     waitUntil: options.waitUntil || 'domcontentloaded',
     timeout: Number.isFinite(options.gotoTimeoutMs) ? options.gotoTimeoutMs : 60_000,
   });
+  try {
+    await waitForFlowReady(page, options);
+  } catch (err) {
+    const screenshotPath = await saveFailureScreenshot(page, {
+      screenshotsDir: options.screenshotsDir,
+      item,
+      stage: 'flow_ready',
+    });
+    throw new FlowAdapterError('timed out waiting for Flow project UI to load', {
+      state: 'failed_timeout',
+      exitCode: EXIT_CODES.timeout,
+      stage: 'flow_ready',
+      screenshotPath,
+      cause: err,
+    });
+  }
 
   const classifyPageFn = typeof options.classifyPage === 'function'
     ? options.classifyPage
     : classifyPage;
+  await configureVideoMode(page, options);
   const initialBlocker = await detectBlocker(page, classifyPageFn);
-  if (initialBlocker) {
+  if (initialBlocker && !shouldIgnoreBlocker(initialBlocker, ['failed_tile'])) {
     const screenshotPath = await saveFailureScreenshot(page, {
       screenshotsDir: options.screenshotsDir,
       item,
@@ -486,7 +692,7 @@ async function generateOne({
 
   await uploadStartFrame(page, imagePath, { ...options, item }, 'upload_start_frame');
   const postUploadBlocker = await detectBlocker(page, classifyPageFn);
-  if (postUploadBlocker) {
+  if (postUploadBlocker && !shouldIgnoreBlocker(postUploadBlocker, ['failed_tile'])) {
     const screenshotPath = await saveFailureScreenshot(page, {
       screenshotsDir: options.screenshotsDir,
       item,
@@ -551,13 +757,18 @@ module.exports = {
   SUBMIT_TEXTS,
   UPLOAD_TEXTS,
   buildScreenshotPath,
+  clickVisibleButton,
+  configureVideoMode,
   decorateAndThrow,
   detectBlocker,
   enterMotionPrompt,
   findClickableByText,
   findDownloadTarget,
+  findStartFrameDropTarget,
+  findSubmitButton,
   findTextInputBox,
   generateOne,
+  hasActiveRenderProgress,
   includesAnyText,
   normalizeDownloadResult,
   normalizeText,
@@ -570,4 +781,5 @@ module.exports = {
   uploadStartFrame,
   validateVideoFile,
   waitForCompletion,
+  waitForFlowReady,
 };

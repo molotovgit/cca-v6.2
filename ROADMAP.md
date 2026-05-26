@@ -32,7 +32,8 @@ Status: in progress. The Flow smoke and sequential batch code paths are scaffold
 - Done: add a non-watch idle timeout to `save_videos.cjs` so zero-progress runs exit with code `6`.
 - Done: add Phase 1 blocker classification, MP4 download helper, Flow adapter skeleton, and Flow smoke worker.
 - Done: add Phase 2 batch-progress helpers and `run_videos_autonomous.cjs` sequential orchestration scaffold.
-- Next: run and tune a real one-clip Flow smoke test against `labs.google/fx/tools/flow`.
+- Done: run and tune the first real one-clip Flow smoke test against `labs.google/fx/tools/flow`; the worker reached `Video · 4s` rendering and classified Flow's failed render tile.
+- Next: get one live Flow clip from start frame to saved MP4 by isolating why Flow failed at `7%` in the smoke project.
 - Next: after the one-clip smoke succeeds, run a small sequential batch with `run_videos_autonomous.cjs`.
 - Continue robust failure detection in video scripts, especially exact Flow quota, policy, subscription, failed-tile, and UI-drift text seen in live runs.
 - Continue building Flow as the primary video adapter; keep Gemini video as fallback only.
