@@ -58,6 +58,8 @@ Exit criteria:
 
 Goal: make automation less brittle when accounts or browser sessions change.
 
+Status: done (2026-05-27). `playwright-stealth` dependency declared + keepalive import hardened; additive rotation/login/blocker diagnostics (JSONL event logs + `rotation_state.json` snapshot) with the protected login state machines untouched; session-init/fallback + error-classifier edge-case tests added.
+
 - Add `playwright-stealth` where needed.
 - Improve account rotation and login diagnostics.
 - Add tests for browser session initialization and fallback behavior.
