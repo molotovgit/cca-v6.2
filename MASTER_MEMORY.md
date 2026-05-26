@@ -49,8 +49,10 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 1. Run one live Flow smoke test with `node src/node/workers/submit_flow_videos.cjs <prompts.json> --limit 1 --max-in-flight 1`.
 2. Tune `flow_adapter.cjs` selectors and `video_errors.cjs` blocker text against the real Flow UI.
 3. Confirm one image becomes one saved MP4 under `data/videos/...` and `data/.cca/video_state.json` records `saved`.
-4. Only after live smoke success, start sequential batch design for `run_videos_autonomous.cjs`.
-5. Keep the working image pipeline intact while Flow video is implemented.
+4. Run a small sequential Flow batch with `node src/node/orchestrators/run_videos_autonomous.cjs <prompts.json> --limit <N> --max-attempts 3 --max-no-progress 3`.
+5. Add the account-rotation hook after the real Flow quota/credit blocker shape is known.
+6. Do not start Phase 3 concurrency until the one-clip smoke and sequential batch path are stable against the live Flow UI.
+7. Keep the working image pipeline intact while Flow video is implemented.
 
 ## Implementation Log
 - 2026-05-26: Started Phase 0 implementation. Work is split into recoverable slices: video state helpers, submitter failure exits, saver idle timeout, and focused Node tests. Sub-agents should work in isolated worktrees and avoid image pipeline changes.
@@ -68,6 +70,7 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - 2026-05-26: Started Phase 2 sequential-batch implementation. Target is `run_videos_autonomous.cjs` plus focused batch-progress/retry helpers: resume from `video_state`, process Flow clips one at a time, stop on quota/policy, bound retries/no-progress, and keep live Flow smoke as a required validation gate before production batch use.
 - 2026-05-26: Phase 2 batch helper checkpoint complete. `src/node/video/video_batch.cjs` summarizes video state, selects retryable items, caps exhausted retries, builds progress snapshots/signatures, detects no-progress, and chooses aggregate exit codes for sequential orchestration.
 - 2026-05-26: Phase 2 autonomous orchestrator checkpoint complete. `src/node/orchestrators/run_videos_autonomous.cjs` loops `submit_flow_videos` one clip at a time, re-reads `video_state`, honors `--limit`, `--max-attempts`, and `--max-no-progress`, and exits with stable codes for completion, quota, policy, missing assets, retry exhaustion, and no-progress timeout.
+- 2026-05-26: Phase 2 docs/memory checkpoint. Batch helper and orchestrator scaffolding are code-complete with focused tests, but production readiness still depends on one live Flow smoke pass and one small live sequential batch pass.
 
 ## Index Links
 - [MEMORY_INDEX.md](MEMORY_INDEX.md)

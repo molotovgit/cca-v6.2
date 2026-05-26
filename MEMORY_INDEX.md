@@ -18,7 +18,7 @@ Obsidian-friendly entry point for the workspace memory layer.
 - [deploy/README.md](deploy/README.md): deployment-specific guidance.
 
 ## Current Issue Priority
-1. Flow-first video smoke implementation: `flow_adapter.cjs`, `submit_flow_videos.cjs`, one image -> one MP4, `max_in_flight=1`.
+1. Flow-first video validation and Phase 2 sequential batch orchestration: `flow_adapter.cjs`, `submit_flow_videos.cjs`, `run_videos_autonomous.cjs`, one image -> one MP4, then one-at-a-time batch with `max_in_flight=1`.
 2. Workspace/setup correctness: `.env` template path, accounts path, fresh-run docs.
 3. Python pipeline blockers: `args.lang` typos in fetch/upload.
 4. Missing dependency: `playwright-stealth` for Gemini keepalive.
@@ -36,6 +36,12 @@ Obsidian-friendly entry point for the workspace memory layer.
 - `src/node/video/flow_adapter.cjs` exposes `generateOne()` for one Flow clip.
 - `src/node/workers/submit_flow_videos.cjs` is the smoke CLI: `node src/node/workers/submit_flow_videos.cjs <prompts.json> --limit 1 --max-in-flight 1`.
 - Focused Node tests pass for Phase 0 and Phase 1 modules.
+
+## Latest Phase 2 Checkpoint
+- `src/node/video/video_batch.cjs` summarizes batch progress, selects retryable items, caps exhausted retries, detects no-progress loops, and chooses aggregate exit codes.
+- `src/node/orchestrators/run_videos_autonomous.cjs` is the sequential batch CLI: `node src/node/orchestrators/run_videos_autonomous.cjs <prompts.json> --limit <N> --max-attempts 3 --max-no-progress 3`.
+- `submit_flow_videos.cjs` already exposes a programmatic worker API and supports injected adapter/browser dependencies for tests; no worker API patch was needed in Phase 2.
+- Phase 2 is code-scaffolded, but not production-ready until a live one-clip Flow smoke and small sequential Flow batch are verified.
 
 ## Current Video Decision
 - Production video target is Google Flow / Veo through `labs.google/fx/tools/flow`.

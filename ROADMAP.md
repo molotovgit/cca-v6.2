@@ -25,15 +25,19 @@ Exit criteria:
 
 Goal: make Flow-first video animation reliable, observable, and recoverable.
 
+Status: in progress. The Flow smoke and sequential batch code paths are scaffolded with focused tests, but still need live validation against `labs.google/fx/tools/flow` before production use.
+
 - Done: add Phase 0 state baseline in `src/node/video/video_state.cjs`.
 - Done: make `submit_videos.cjs` return non-zero when submission errors accumulate.
 - Done: add a non-watch idle timeout to `save_videos.cjs` so zero-progress runs exit with code `6`.
 - Done: add Phase 1 blocker classification, MP4 download helper, Flow adapter skeleton, and Flow smoke worker.
+- Done: add Phase 2 batch-progress helpers and `run_videos_autonomous.cjs` sequential orchestration scaffold.
 - Next: run and tune a real one-clip Flow smoke test against `labs.google/fx/tools/flow`.
+- Next: after the one-clip smoke succeeds, run a small sequential batch with `run_videos_autonomous.cjs`.
 - Continue robust failure detection in video scripts, especially exact Flow quota, policy, subscription, failed-tile, and UI-drift text seen in live runs.
 - Continue building Flow as the primary video adapter; keep Gemini video as fallback only.
 - Harden orchestration around render start, render completion, and retry paths.
-- Build `run_videos_autonomous.cjs` as a sibling to the image orchestrator.
+- Add account rotation once the live quota/credit blocker shape is measured.
 - Add explicit handling for missing assets, partial outputs, and stale temp files.
 - Introduce better logging for render state and failure cause.
 - Add regression tests for the current video failure modes.

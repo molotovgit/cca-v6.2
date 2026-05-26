@@ -211,15 +211,23 @@ Acceptance:
 
 Goal: process 80 images one at a time.
 
+Status: in progress. The batch helper and autonomous sequential runner are
+implemented as a tested scaffold, but live Flow validation is still required.
+Keep the one-clip smoke path as the gate before treating batch automation as
+production-ready.
+
 Tasks:
 
-- Add `run_videos_autonomous.cjs`.
-- Reconcile `data/videos/...` with `video_state.json`.
-- Process only missing indices.
-- Add per-item timeout and bounded retries.
+- Done: add `run_videos_autonomous.cjs`.
+- Done: reconcile `data/videos/...` with `video_state.json`.
+- Done: process only missing/retryable indices.
+- Done: add bounded retries and no-progress detection.
 - Add blocker detection for Flow credits/quota, failed tiles, policy, and
   subscription/plan blocks.
 - Add account rotation hook when credits/quota are exhausted.
+- After the first live batch pass lands, update memory docs with observed retry
+  bounds, exact blocker text, and any exit-code tuning needed from the real Flow
+  UI.
 
 Acceptance:
 
