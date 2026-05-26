@@ -32,12 +32,27 @@
 const { spawn, spawnSync } = require('child_process');
 const path = require('path');
 const fs   = require('fs');
+// Additive diagnostics (ROADMAP Phase 3, Lane B). Purely observational — every
+// call below is best-effort and wrapped so a logging failure can never break
+// rotation control flow.
+const diag = require('../utils/diag_events.cjs');
 
 const REPO       = path.resolve(__dirname, '../../..');
 const STATE_DIR  = path.join(REPO, 'data', '.cca');
 const SAVED_FILE = path.join(STATE_DIR, 'saved_indices.json');
 const TAB_MAP_FILE = path.join(STATE_DIR, 'tab_map.json');
 const BLOCKER_ALERTS_FILE = path.join(STATE_DIR, 'blocker_alerts.json');
+// Additive diagnostics sinks (JSONL append + state snapshot).
+const ROTATION_EVENTS_FILE = path.join(STATE_DIR, 'rotation_events.jsonl');
+const ROTATION_STATE_FILE  = path.join(STATE_DIR, 'rotation_state.json');
+
+// Best-effort diag emit: append a formatted event to the rotation JSONL.
+// Wrapped so any failure is swallowed — diagnostics must never affect control flow.
+function emitRotationEvent(fields) {
+  try {
+    diag.appendEvent(ROTATION_EVENTS_FILE, diag.formatEvent(fields), { fs });
+  } catch (_) { /* diagnostics are best-effort; never break rotation */ }
+}
 const PYTHON      = process.env.PYTHON || 'python';
 const GEMINI_PORT = parseInt(process.env.GEMINI_CDP_PORT || '9223', 10);
 
@@ -392,6 +407,17 @@ async function triggerRotation(reason) {
     // 2. Advance the rotator pointer for Gemini (v6.2: wrap-around — when the
     //    list is exhausted, the rotator returns to index 0 and keeps cycling).
     const rot = runShell(PYTHON, ['-m', 'src.python.auth.accounts', 'rotate', 'gemini', '--wrap']);
+    // DIAG (additive): record the `accounts rotate` outcome.
+    {
+      let rotAcct = {};
+      try { rotAcct = JSON.parse(rot.stdout); } catch (_) {}
+      emitRotationEvent({
+        type: 'rotate', provider: 'gemini', reason,
+        exitCode: rot.code,
+        accountLabel: rotAcct.label, accountIndex: rotAcct.index, accountEmail: rotAcct.email,
+        stderrExcerpt: (rot.stderr || '').trim(),
+      });
+    }
     if (rot.code !== 0) {
       // With --wrap, exit-2 (NoMoreAccountsError) is impossible. Any non-zero
       // here is a transient/unexpected failure — log and bail out of this
@@ -411,6 +437,13 @@ async function triggerRotation(reason) {
 
     // 3. Sign out + sign in to the new account on the Gemini Chrome
     const login = runShell(PYTHON, ['src/python/auth/auto_login.py', '--skip-chatgpt', '--force-resignin'], { stdio: 'inherit' });
+    // DIAG (additive): record the `auto_login` outcome. (stdio:'inherit' means
+    // stderr was streamed, not captured, so stderrExcerpt is intentionally omitted.)
+    emitRotationEvent({
+      type: 'login', provider: 'gemini', reason,
+      exitCode: login.code,
+      accountLabel: newAccount.label, accountIndex: newAccount.index, accountEmail: newAccount.email,
+    });
     if (login.code !== 0) {
       // v6.2: do NOT exit on login failure — the pipeline must keep trying
       // until all images are generated. Log the failure, respawn the workers,
@@ -434,6 +467,22 @@ async function triggerRotation(reason) {
     spawnSubmit();
     scheduleSaveSpawn('post-rotation');
     console.log(`${ts()} [ORCH] rotation complete — resumed at ${lastSaveCount}/${TOTAL}`);
+    // DIAG (additive): record successful rotation + write a state snapshot so an
+    // operator can see the current account / resume point after the fact.
+    emitRotationEvent({
+      type: 'rotation_complete', provider: 'gemini', reason,
+      accountLabel: newAccount.label, accountIndex: newAccount.index, accountEmail: newAccount.email,
+      resumedImageIndex: lastSaveCount,
+    });
+    try {
+      const snap = diag.rotationStateSnapshot({
+        provider: 'gemini',
+        accountLabel: newAccount.label, accountIndex: newAccount.index, accountEmail: newAccount.email,
+        rotationCount, resumedImageIndex: lastSaveCount, total: TOTAL, reason,
+      });
+      fs.mkdirSync(path.dirname(ROTATION_STATE_FILE), { recursive: true });
+      fs.writeFileSync(ROTATION_STATE_FILE, JSON.stringify(snap, null, 2));
+    } catch (_) { /* snapshot is best-effort; never break rotation */ }
   } finally {
     rotationInFlight = false;
   }
