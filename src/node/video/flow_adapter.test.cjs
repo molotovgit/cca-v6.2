@@ -336,6 +336,117 @@ test('findCompletedTile default seam throws the documented live-discovery error'
   );
 });
 
+// LIVE (flow_probe): a completed tile is a visible <video> whose src is the
+// media.getMediaUrlRedirect endpoint. Build an eval page exposing a stubbed
+// <video> DOM so the default scan can run in-process.
+function makeVideoDomPage(videos) {
+  const makeEl = (v) => ({
+    currentSrc: v.currentSrc || '',
+    src: v.src || '',
+    getBoundingClientRect: () => ({
+      left: v.left ?? 10,
+      top: v.top ?? 20,
+      width: v.width ?? 320,
+      height: v.height ?? 180,
+      bottom: (v.top ?? 20) + (v.height ?? 180),
+      right: (v.left ?? 10) + (v.width ?? 320),
+    }),
+    querySelector: (sel) => (sel === 'source[src]' && v.sourceSrc ? { src: v.sourceSrc } : null),
+  });
+  const els = videos.map(makeEl);
+  // Tag each element so `instanceof Element` passes inside the evaluate body.
+  return {
+    evaluate: async (fn, ...args) => {
+      const prevDoc = global.document;
+      const prevWin = global.window;
+      const prevElement = global.Element;
+      global.Element = function Element() {};
+      for (const el of els) Object.setPrototypeOf(el, global.Element.prototype);
+      global.document = {
+        querySelectorAll: (sel) => (sel === 'video' ? els.slice() : []),
+      };
+      global.window = { innerWidth: 1280, innerHeight: 800, getComputedStyle: () => ({}) };
+      try {
+        return await fn(...args);
+      } finally {
+        global.document = prevDoc;
+        global.window = prevWin;
+        global.Element = prevElement;
+      }
+    },
+  };
+}
+
+test('findCompletedTile returns the media.getMediaUrlRedirect <video src> from the page DOM', async () => {
+  const src = 'https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=11111111-2222-3333-4444-555555555555';
+  const page = makeVideoDomPage([{ src, left: 100, top: 200, width: 320, height: 180 }]);
+
+  const tile = await findCompletedTile(page, {});
+  assert.deepEqual(tile, { kind: 'video', src, x: 260, y: 290 });
+});
+
+test('findCompletedTile prefers currentSrc and reads source[src] for the redirect <video>', async () => {
+  const src = 'https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  // A bare <video> with no src/currentSrc but a matching <source src>.
+  const page = makeVideoDomPage([{ sourceSrc: src, left: 0, top: 0, width: 200, height: 100 }]);
+
+  const tile = await findCompletedTile(page, {});
+  assert.equal(tile.kind, 'video');
+  assert.equal(tile.src, src);
+});
+
+test('findCompletedTile falls back to the live-discovery throw when no matching <video> is present', async () => {
+  // A visible <video>, but its src is not the getMediaUrlRedirect endpoint.
+  const page = makeVideoDomPage([{ src: 'blob:https://labs.google/fx/preview-not-complete' }]);
+
+  await assert.rejects(
+    () => findCompletedTile(page, {}),
+    (err) => {
+      assert.equal(err instanceof FlowAdapterError, true);
+      assert.equal(err.state, 'failed_download');
+      assert.equal(err.stage, 'await_completed_tile');
+      assert.match(err.message, /needs live discovery/i);
+      return true;
+    }
+  );
+});
+
+test('awaitCompletedTile resolves the default redirect <video> after a reload rescan', async () => {
+  const src = 'https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=99999999-8888-7777-6666-555555555555';
+  let reloaded = false;
+  const videoPage = makeVideoDomPage([{ src, left: 50, top: 60, width: 320, height: 180 }]);
+  const calls = [];
+  const page = {
+    url: () => 'https://labs.google/fx/tools/flow/project/test',
+    goto: async (url) => { calls.push(['goto', url]); reloaded = true; },
+    waitForFunction: async () => true,
+    // Before reload: live view exposes no completed <video>; after reload the
+    // Videos tab DOM has the real redirect <video>, so the default scan finds it.
+    evaluate: async (fn, ...args) => (reloaded ? videoPage.evaluate(fn, ...args) : ''),
+    mouse: { click: async () => {} },
+    screenshot: async (opts) => {
+      fs.mkdirSync(path.dirname(opts.path), { recursive: true });
+      fs.writeFileSync(opts.path, 'shot');
+    },
+  };
+
+  const target = await awaitCompletedTile(page, {
+    item: { idx: 1, slug: 'demo' },
+    classifyPage: async () => null,
+    findDownloadTarget: async () => null,
+    timeoutMs: 1,
+    pollMs: 1,
+    reloadAttempts: 2,
+    reloadDelayMs: 0,
+    rescanSettleMs: 0,
+    readySettleMs: 0,
+    openVideosTab: async () => { calls.push(['videosTab']); },
+  });
+
+  assert.deepEqual(target, { kind: 'video', src, x: 210, y: 150 });
+  assert.equal(calls.some(entry => entry[0] === 'goto'), true);
+});
+
 test('awaitCompletedTile surfaces the unknown-selector error after reload attempts', async () => {
   const calls = [];
   const page = {

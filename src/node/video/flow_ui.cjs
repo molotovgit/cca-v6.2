@@ -18,6 +18,9 @@
 //   left-nav tabs:         "dashboardAll Media", "imageView images Images",
 //                          "videocam View videos Videos"
 //   failed card:           "warning Failed undo Reuse Prompt delete_forever Delete image 99%"
+//   completed video tile:  visible <video src="https://labs.google/fx/api/trpc/
+//                          media.getMediaUrlRedirect?name=<UUID>"> (no download
+//                          button — fetch the authenticated src, follow 302s)
 'use strict';
 
 const MODE_DROPDOWN_RE = /nano banana|crop_16_9|omni flash|video\s*[·.]/i;
@@ -66,16 +69,29 @@ const MEDIA_TABS = {
 // that the whole batch/session is dead. Callers should surface, not abort.
 const FAILED_CARD_RE = /\bfailed\b.{0,120}\b(reuse prompt|delete image|99%)\b/i;
 
-const PROGRESS_RE = /\b(\d{1,3})%\b/;
+// Fixed: the old trailing `\b` after `%` is unsatisfiable (`%` is non-word and
+// the following char — space/end — is also non-word), so it NEVER matched real
+// "7%" / "99%" strings. Match an optional gap before the percent sign instead.
+const PROGRESS_RE = /(\d{1,3})\s*%/;
 const ACTIVITY_RE = /\b(generating|rendering|creating)\b/i;
 
-// TODO(live): finished-tile selector in the Videos tab. The completed-tile DOM
-// has never been reached over CDP — leave null until flow_probe captures it.
-const COMPLETED_TILE_SELECTOR = null;
+// LIVE (flow_probe): a completed Flow video tile in the Videos/All Media view
+// exposes a visible <video> whose src is an authenticated redirect endpoint,
+// e.g. https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=<UUID>
+// (two real examples captured). A tile is "complete" when such a <video> is
+// visible. There is NO per-tile download button on the completed tile.
+const COMPLETED_TILE_SELECTOR = Object.freeze({
+  videoSrcRe: /media\.getMediaUrlRedirect\?name=/i,
+});
 
-// TODO(live): how a finished video is downloaded — <video> src vs a per-tile
-// menu (download_forever / "Download") vs network capture. Unknown until probe.
-const DOWNLOAD_AFFORDANCE = null;
+// LIVE (flow_probe): downloads are NOT via a button — fetch the completed
+// <video> src directly over authenticated HTTP. The getMediaUrlRedirect
+// endpoint 302s to the real media, so the transport must follow redirects.
+const DOWNLOAD_AFFORDANCE = Object.freeze({
+  kind: 'video-src',
+  transport: 'http',
+  followRedirects: true,
+});
 
 /**
  * Extracts the credit count from a "Generating will use N credits" readout.

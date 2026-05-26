@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { classifyPage, EXIT_CODES } = require('./video_errors.cjs');
+const flowUi = require('./flow_ui.cjs');
 
 const DEFAULT_FLOW_URL = 'https://labs.google/fx/tools/flow';
 const DEFAULT_MIN_VIDEO_BYTES = 50 * 1024;
@@ -416,6 +417,44 @@ async function findCompletedTile(page, options = {}) {
   if (typeof options.findCompletedTile === 'function') {
     return options.findCompletedTile(page, options);
   }
+
+  // LIVE (flow_probe): a completed tile is a visible <video> whose src matches
+  // media.getMediaUrlRedirect?name=<UUID>. Reuse the findDownloadTarget <video>
+  // scan and keep only a hit whose src matches the completed-tile pattern.
+  const videoSrcRe = flowUi.COMPLETED_TILE_SELECTOR
+    && flowUi.COMPLETED_TILE_SELECTOR.videoSrcRe;
+  if (videoSrcRe && page && typeof page.evaluate === 'function') {
+    const tile = await page.evaluate((source) => {
+      const pattern = new RegExp(source, 'i');
+      const isVisible = (el) => {
+        if (!el || !(el instanceof Element)) return false;
+        const style = window.getComputedStyle(el);
+        if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width >= 4 && rect.height >= 4 && rect.bottom >= 0 && rect.right >= 0;
+      };
+
+      const videos = Array.from(document.querySelectorAll('video'));
+      for (const video of videos) {
+        if (!isVisible(video)) continue;
+        const src = video.currentSrc || video.src || video.querySelector('source[src]')?.src || '';
+        if (!src || !pattern.test(src)) continue;
+        const rect = video.getBoundingClientRect();
+        return {
+          kind: 'video',
+          src,
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+        };
+      }
+      return null;
+    }, videoSrcRe.source).catch(() => null);
+
+    if (tile) return tile;
+  }
+
+  // No completed <video> present yet. Only now is the live-discovery error
+  // appropriate — the reload/rescan loop catches this and retries.
   throw new FlowAdapterError('completed-tile/download selector unknown — needs live discovery (see flow_probe)', {
     state: 'failed_download',
     exitCode: EXIT_CODES.generic,

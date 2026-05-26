@@ -142,3 +142,78 @@ test('downloadMp4ToFile rejects tiny outputs with a clear error', async () => {
     err => err.code === 'ERR_MP4_TOO_SMALL' && /mp4 too small/.test(err.message)
   );
 });
+
+// LIVE (flow_probe): the completed <video> src is a getMediaUrlRedirect endpoint
+// that 302s to the real media. The downloader must follow that redirect, carry
+// cookies/UA across the hop, and save the final bytes through the size check.
+test('downloadMp4ToFile follows a getMediaUrlRedirect 302 to the real media bytes', async () => {
+  const dir = makeTmpDir();
+  const payload = Buffer.from('REAL-FLOW-MP4-PAYLOAD');
+  const server = http.createServer((req, res) => {
+    if (req.url.startsWith('/fx/api/trpc/media.getMediaUrlRedirect')) {
+      // Authenticated redirect hop must carry the session cookie + UA.
+      assert.equal(req.headers.cookie, 'SID=auth-token');
+      assert.equal(req.headers['user-agent'], 'FlowBrowser/2.0');
+      res.statusCode = 302;
+      res.setHeader('Location', '/media/real-clip.mp4');
+      res.end();
+      return;
+    }
+    // Redirected media hop must still carry credentials.
+    assert.equal(req.url, '/media/real-clip.mp4');
+    assert.equal(req.headers.cookie, 'SID=auth-token');
+    res.statusCode = 200;
+    res.end(payload);
+  });
+
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const page = {
+    cookies: async () => [{ name: 'SID', value: 'auth-token' }],
+    evaluate: async () => 'FlowBrowser/2.0',
+  };
+
+  try {
+    const result = await downloadMp4ToFile(
+      page,
+      `http://127.0.0.1:${port}/fx/api/trpc/media.getMediaUrlRedirect?name=11111111-2222-3333-4444-555555555555`,
+      path.join(dir, 'flow-clip'),
+      { minBytes: payload.length, atomic: { pid: 7, now: 8, nonce: 'redir' } }
+    );
+
+    assert.equal(result.bytes, payload.length);
+    assert.equal(result.filePath, path.join(dir, 'flow-clip.mp4'));
+    assert.equal(fs.readFileSync(result.filePath).toString(), payload.toString());
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('downloadMp4ToFile rejects a too-small body delivered after a 302 redirect', async () => {
+  const dir = makeTmpDir();
+  const tiny = Buffer.from('x');
+  const server = http.createServer((req, res) => {
+    if (req.url === '/redirect') {
+      res.statusCode = 302;
+      res.setHeader('Location', '/tiny');
+      res.end();
+      return;
+    }
+    res.statusCode = 200;
+    res.end(tiny);
+  });
+
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const page = { evaluate: async () => 'MockBrowser/1.0' };
+
+  try {
+    await assert.rejects(
+      () => downloadMp4ToFile(page, `http://127.0.0.1:${port}/redirect`, path.join(dir, 'clip.mp4'), { minBytes: 50 * 1024 }),
+      err => err.code === 'ERR_MP4_TOO_SMALL' && /mp4 too small/.test(err.message)
+    );
+    assert.equal(fs.existsSync(path.join(dir, 'clip.mp4')), false);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
