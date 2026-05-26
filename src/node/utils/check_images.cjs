@@ -25,7 +25,45 @@ function deriveOutputDir(promptsJsonPath) {
   return newParts.join(path.sep);
 }
 
-(async () => {
+// Compare the expected PNGs (derived from prompt entries) against what actually
+// landed in `outDir`. Pure aside from the fs reads it needs to inspect the dir.
+// Returns the artifact-placement verdict the CLI summary/exit-code is built on:
+//   present  — file exists and is >= minBytes
+//   missing  — no file at the expected name
+//   small    — file exists but is < minBytes (likely a failed/stub generation)
+//   extras   — .png files in the dir that match no expected name
+function checkArtifacts(prompts, outDir, minBytes = MIN_VALID_BYTES) {
+  const present = [];
+  const missing = [];
+  const small = [];   // exists but too small (likely failed)
+
+  for (const entry of prompts) {
+    const expected = `${String(entry.idx).padStart(3, '0')}-${entry.slug}.png`;
+    const fullPath = path.join(outDir, expected);
+    if (!fs.existsSync(fullPath)) {
+      missing.push({ idx: entry.idx, slug: entry.slug, expected });
+      continue;
+    }
+    const size = fs.statSync(fullPath).size;
+    if (size < minBytes) {
+      small.push({ idx: entry.idx, slug: entry.slug, expected, size });
+      continue;
+    }
+    present.push({ idx: entry.idx, slug: entry.slug, expected, size });
+  }
+
+  // Also list "extra" files in the dir that don't match any expected name
+  const expectedSet = new Set(prompts.map(e => `${String(e.idx).padStart(3, '0')}-${e.slug}.png`));
+  let actualFiles = [];
+  if (fs.existsSync(outDir)) {
+    actualFiles = fs.readdirSync(outDir).filter(f => f.toLowerCase().endsWith('.png'));
+  }
+  const extras = actualFiles.filter(f => !expectedSet.has(f));
+
+  return { present, missing, small, extras };
+}
+
+function runCli() {
   const promptsPath = process.argv[2];
   const writeMissing = process.argv.includes('--write-missing');
   if (!promptsPath) {
@@ -44,32 +82,7 @@ function deriveOutputDir(promptsJsonPath) {
   console.log(`[check] images:   ${outDir}`);
   console.log('');
 
-  const present = [];
-  const missing = [];
-  const small = [];   // exists but too small (likely failed)
-
-  for (const entry of prompts) {
-    const expected = `${String(entry.idx).padStart(3, '0')}-${entry.slug}.png`;
-    const fullPath = path.join(outDir, expected);
-    if (!fs.existsSync(fullPath)) {
-      missing.push({ idx: entry.idx, slug: entry.slug, expected });
-      continue;
-    }
-    const size = fs.statSync(fullPath).size;
-    if (size < MIN_VALID_BYTES) {
-      small.push({ idx: entry.idx, slug: entry.slug, expected, size });
-      continue;
-    }
-    present.push({ idx: entry.idx, slug: entry.slug, expected, size });
-  }
-
-  // Also list "extra" files in the dir that don't match any expected name
-  const expectedSet = new Set(prompts.map(e => `${String(e.idx).padStart(3, '0')}-${e.slug}.png`));
-  let actualFiles = [];
-  if (fs.existsSync(outDir)) {
-    actualFiles = fs.readdirSync(outDir).filter(f => f.toLowerCase().endsWith('.png'));
-  }
-  const extras = actualFiles.filter(f => !expectedSet.has(f));
+  const { present, missing, small, extras } = checkArtifacts(prompts, outDir);
 
   // ── Summary ──
   console.log(`────── SUMMARY ──────`);
@@ -111,4 +124,10 @@ function deriveOutputDir(promptsJsonPath) {
 
   // Exit code: 0 if all present, 1 if any missing/small (useful for scripting)
   process.exit(missing.length + small.length > 0 ? 1 : 0);
-})();
+}
+
+if (require.main === module) {
+  runCli();
+}
+
+module.exports = { deriveOutputDir, checkArtifacts, MIN_VALID_BYTES };
