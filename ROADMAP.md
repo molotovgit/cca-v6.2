@@ -72,6 +72,8 @@ Exit criteria:
 
 Goal: protect the full pipeline with practical regression checks.
 
+Status: done (2026-05-27). Recovered + greened the Python test suite (400 tests, 11 modules); added a GitHub Actions CI gate (node + python jobs on push/PR) + `npm test` scripts; exposed and covered the `check_images.cjs` artifact-placement checker. **All four ROADMAP phases are now complete; CI guards regressions on every push.**
+
 - Add smoke tests for fetch -> refine -> prompts -> images -> upload.
 - Add checks for output integrity and artifact placement.
 - Add a small CI gate for the highest-risk orchestration paths.
