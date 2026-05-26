@@ -11,7 +11,7 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - The system is designed to run unattended and rotate accounts on rate limits.
 - Live dashboard exists on port 7777 for status and logs.
 - Image generation is functional enough to use in production.
-- Video generation/animation exists in code, but the current production reality is that it fails or is unreliable enough to be treated as blocked until rebuilt around Flow state and blockers.
+- Video pipeline (Flow) is now built and CI-guarded (Phases 0–4), and its plumbing is PROVEN live end-to-end: a generated image → Flow → a saved MP4 (`generateOne`: mode-select, start-frame upload, submit, reload/rescan, completed-tile discovery, MP4 download, state=`saved`). The one open gap is start-frame FIDELITY — Flow currently renders a prompt-generated clip rather than animating the supplied image (see Known Blockers / WISHLIST).
 
 ## Architecture Map
 - `src/node/orchestrators/`: entry points for autonomous, batch, and pipeline runs.
@@ -24,17 +24,13 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - `deploy/`: multi-host deployment support.
 
 ## Known Production Blockers
-- Flow-first video animation pipeline is not dependable in production yet. Treat this as the current top engineering priority.
-- `docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md` is the implementation-ready plan.
-- v4 evidence: image stage completed `80/80`, then Flow Stage 5 failed. The real Flow script crashed on `ReferenceError: TARGET_IN_FLIGHT is not defined`, then later hit failed tiles/rate-limit behavior and watchdog kill with `0/80` videos saved.
-- The deprecated zip does not include the actual `animate_flow.cjs` used in the v4 Flow run, so do not depend on resurrecting that missing script.
-- Phase 0 fixed the first silent-failure layer: `src/node/workers/submit_videos.cjs` now exits non-zero on submission errors, and `src/node/workers/save_videos.cjs` now exits code `6` on non-watch idle timeout.
-- `src/node/workers/save_videos.cjs` still does not classify Gemini quota, safety, subscription, UI, or render-failed states beyond idle timeout.
-- Video does not yet have the same autonomous orchestration, rescue, blocker classification, credit/account handling, and disk-first resume model as the image path.
-- Gemini UI selectors and state handling are brittle and need continual verification.
-- Account rotation is necessary when rate limits hit.
+- **Flow start-frame fidelity** is the single open video blocker (top priority). `generateOne` runs end-to-end and saves an MP4, but Flow renders a *prompt-generated* clip instead of animating the supplied start frame (extracted frame 0 ≠ input PNG; `verifyStartFrameAttached` false-positives). See WISHLIST "Flow start-frame fidelity" for the finding + fix steps.
+- Notion UPLOAD is image-only; video MP4s land on disk only (by design until the one-clip path is faithful).
+- Live concurrency above 1 is unproven; default `CCA_VIDEO_MAX_IN_FLIGHT=1` until real failed-tile rates are measured (v4 once failed with 4 in-flight).
+- Account rotation is necessary when rate limits hit; the live quota/credit blocker text/shape is not yet measured against real exhaustion.
+- Browser automation depends on signed-in Chrome on the CDP profile (`:9222` ChatGPT, `:9223` Gemini/Flow) with OPEN signed-in tabs — image gen needs a present signed-in `gemini.google.com` context. Sign-in is never automated past first manual confirmation.
 - Notion uploads can fail on API timing or permissions if the workspace connection is incomplete.
-- Browser automation depends on signed-in Chrome sessions and local keepalive windows.
+- Gemini/Flow UI selectors can drift and need verification against live runs. `docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md` is the plan; `cca_v4.zip` is evidence-only (do not resurrect its missing `animate_flow.cjs`).
 
 ## Decisions And Constraints
 - Prefer web subscriptions over APIs when they materially reduce cost.
@@ -46,14 +42,10 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - Keep changes scoped; do not refactor unrelated parts while stabilizing the pipeline.
 
 ## Next Action Queue
-1. Done (2026-05-26): Flow post-submit reload/rescan + completed-tile discovery + MP4 download wired (`flow_adapter.awaitCompletedTile`/`findCompletedTile`, `flow_ui.COMPLETED_TILE_SELECTOR`/`DOWNLOAD_AFFORDANCE`). MP4 download PROVEN live — two real Flow clips saved as valid MP4s via `video_download.cjs` through the `:9223` session.
-2. Prove the source image is actually attached as the Flow start frame (STILL OPEN — visible renders looked prompt-generated; `verifyStartFrameAttached` exists but attachment is unproven live).
-3. Run one full live `submit_flow_videos.cjs <prompts> --limit 1` end-to-end: image → generate → reload → download → `data/.cca/video_state.json` = `saved`.
-4. Run a small sequential live batch with `node src/node/orchestrators/run_videos_autonomous.cjs <prompts.json> --limit <N> --max-attempts 3 --max-no-progress 3`.
-5. Done (2026-05-26): Phase 3 concurrency mechanism shipped (`video_concurrency.cjs` AIMD, default `CCA_VIDEO_MAX_IN_FLIGHT=1`, `--max-in-flight`). Tune `2/3/4` against real failed-tile rates only AFTER the live one-clip + sequential paths are stable.
-6. Done (2026-05-26): Phase 4 integration shipped — opt-in `CCA_ENABLE_VIDEO=1` non-fatal VIDEOS stage in `run_pipeline.cjs` (after IMAGES, before UPLOAD; default-off path unchanged), dashboard video panel, and docs. Notion upload stays image-only. Enabling video for production still depends on items 2–4.
-7. Add the account-rotation hook after the real Flow quota/credit blocker shape is known.
-8. Keep the working image pipeline intact while Flow video is implemented.
+1. Fix Flow start-frame fidelity (TOP): re-run `submit_flow_videos.cjs data/prompts/smoke/full-cycle.json --limit 1` with the Flow composer screenshotted right after upload; confirm OUR image is in the `Start` slot + the mode is true image-to-video; harden `verifyStartFrameAttached` to match our file. Done when MP4 frame 0 equals the input PNG. (See WISHLIST.)
+2. Then: one clean live `generateOne`, a small live sequential batch (`run_videos_autonomous.cjs --limit <N> --max-attempts 3 --max-no-progress 3`), then live concurrency tuning `--max-in-flight 2/3/4`.
+3. Wire Notion video upload (image-only today) once the one-clip path is faithful; add the account-rotation hook once the live quota/credit blocker shape is known.
+4. Keep the working image pipeline + the protected login state machines untouched while iterating on Flow.
 
 ## Implementation Log
 - 2026-05-26: Started Phase 0 implementation. Work is split into recoverable slices: video state helpers, submitter failure exits, saver idle timeout, and focused Node tests. Sub-agents should work in isolated worktrees and avoid image pipeline changes.
@@ -81,6 +73,7 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - 2026-05-26: ROADMAP Phase 1 (Workspace setup) shipped (merged to DaddysBranch). 3-lane swarm: fixed 4 `args.lang` NameError typos (`fetch_chapter.py`, `upload_images.py`); aligned account/`.cca`/`.env` paths to code across README/ARCHITECTURE/CLAUDE/SETUP/RUN + `accounts.py` error string; created `config/examples/.env.example` + reconciled `start.bat` bootstrap to it; added `src/node/setup/verify_workspace.cjs` pre-run health check (+17 tests); added package `__init__.py` (enables `python -m`) + fixed `.gitignore` (un-ignore `tests/`, scope `/test_*.py` to root, `!**/__init__.py`). Authoritative suite: Node 285/0; Python py_compile OK + setup test 3/3. Surfaced (not committed): 15 pre-existing untracked test files now un-ignored — verify-then-commit decision pending. ROADMAP remaining: Phase 3 (browser/account resilience), Phase 4 (e2e coverage).
 - 2026-05-27: ROADMAP Phase 3 (Browser/account resilience) shipped (merged to DaddysBranch). 3-lane swarm with ZERO edits to the protected login state machines: declared the missing `playwright-stealth` dep + hardened `gemini_keepalive.py` import (was a latent fresh-install crash); added purely-additive rotation/login/blocker diagnostics (`data/.cca/rotation_events.jsonl`, `blocker_events.jsonl`, `rotation_state.json`) via new `src/node/utils/diag_events.cjs`, wired into `run_autonomous.cjs` (+49/−0) + `save_images.cjs` with control flow + silent-blocker trigger untouched; added `tests/python/test_session_fallback.py` (20 edge-case tests for credential resolution / error classification / account rotation). Authoritative suite: Node 295/0; Python py_compile OK + 20/20. Protected-region diff confirmed empty (`auth/auto_login.py`, `drivers/browser/{gemini,chatgpt}.py` untouched). ROADMAP remaining: Phase 4 (end-to-end coverage) only.
 - 2026-05-27: ROADMAP Phase 4 (End-to-end coverage) shipped — **ROADMAP COMPLETE (all 4 phases done)**. Recovered the lost Python test suite (11 modules, 400 tests now tracked + green; fixed 2 stale slugify expectations, xfail'd 2 navigator chapter-parse drifts). Added a CI gate (`.github/workflows/ci.yml` — node + python jobs on push/PR, Chromium download skipped) + `package.json` `test:node`/`test:python`/`test` scripts. Exposed + covered the production artifact checker `check_images.cjs` (`deriveOutputDir`/`checkArtifacts` + 14 tests; CLI unchanged via a `require.main` guard). Both CI commands proven on main: `npm run test:node` 309/0, `pytest tests/python` 400 passed / 2 xfailed. Outside the roadmap: the live one-clip Flow `generateOne` proof remains the human gate to enable `CCA_ENABLE_VIDEO=1` in production.
+- 2026-05-27: Live full-cycle proof on `:9223` (saved profile). Opened signed-in Gemini + Flow tabs, authored `data/prompts/smoke/full-cycle.json` (image_prompt + motion_script), generated a real image via `run_autonomous.cjs` (Gemini → `data/images/smoke/full-cycle/001-intro.png`, 2752×1536 "THE ATOM" chalkboard), then animated it via `submit_flow_videos.cjs … --limit 1`. RESULT: the `generateOne` mechanism works end-to-end live (mode-select → start-frame upload → submit → reload/rescan → completed-tile discovery → MP4 download → `video_state.json` state=`saved`, valid 1.1 MB MP4, no failure). BUT extracted frame 0 (1280×720, 4s) is a PROMPT-GENERATED atom title card ("Building Blocks of Matter", colorful 3D models), NOT our white-chalk input image — so Flow did not honor the start frame, and `verifyStartFrameAttached` passed as a false positive. Net: plumbing proven; start-frame fidelity is the remaining real bug (now confirmed with frame evidence). Note: image gen needs an OPEN signed-in `gemini.google.com` tab on `:9223` (a bare CDP Chrome with 0 tabs fails `find_signed_in_gemini`).
 
 ## Index Links
 - [MEMORY_INDEX.md](MEMORY_INDEX.md)

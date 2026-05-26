@@ -4,63 +4,30 @@ Obsidian-friendly entry point for the workspace memory layer.
 
 ## Root Memory Files
 - [MASTER_MEMORY.md](MASTER_MEMORY.md): primary workspace memory and operating notes.
-- [ROADMAP.md](ROADMAP.md): phased execution plan for cleanup and stabilization.
-- [WISHLIST.md](WISHLIST.md): backlog ideas and non-immediate improvements.
-- [docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md](docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md): Flow-first video automation implementation plan.
+- [ROADMAP.md](ROADMAP.md): phase status (all 4 cleanup phases complete) + active work.
+- [WISHLIST.md](WISHLIST.md): remaining backlog, led by the Flow start-frame finding.
+- [docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md](docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md): Flow-first video automation plan.
 
 ## Fast Context Links
-- [README.md](README.md): project summary and run paths.
-- [Project_Overview.md](Project_Overview.md): map-of-content style project overview.
-- [docs/README.md](docs/README.md): documentation index.
-- [docs/core/ARCHITECTURE.md](docs/core/ARCHITECTURE.md): deeper system map.
-- [docs/ops/DEPLOYMENT.md](docs/ops/DEPLOYMENT.md): multi-host and operational setup.
-- [docs/ops/TROUBLESHOOTING.md](docs/ops/TROUBLESHOOTING.md): current failure modes and recovery notes.
-- [deploy/README.md](deploy/README.md): deployment-specific guidance.
+- [README.md](README.md), [Project_Overview.md](Project_Overview.md), [docs/README.md](docs/README.md)
+- [docs/core/ARCHITECTURE.md](docs/core/ARCHITECTURE.md), [docs/ops/DEPLOYMENT.md](docs/ops/DEPLOYMENT.md), [docs/ops/TROUBLESHOOTING.md](docs/ops/TROUBLESHOOTING.md)
 
-## Current Issue Priority
-1. Flow-first video validation and Phase 2 sequential batch orchestration: `flow_adapter.cjs`, `submit_flow_videos.cjs`, `run_videos_autonomous.cjs`, one image -> one MP4, then one-at-a-time batch with `max_in_flight=1`.
-2. Workspace/setup correctness: `.env` template path, accounts path, fresh-run docs.
-3. Python pipeline blockers: `args.lang` typos in fetch/upload.
-4. Missing dependency: `playwright-stealth` for Gemini keepalive.
-5. Test coverage around path resolution, account lookup, and video failure modes.
+## Current status (2026-05-27)
+- **All four ROADMAP cleanup phases are complete** (workspace setup, video stabilization, browser/account resilience, end-to-end coverage). CI gate (`.github/workflows/ci.yml`) runs Node + Python tests on every push; suite green (Node 309/0, Python 400 pass / 2 xfail).
+- **Image generation works** (Gemini, browser-driven) and is production-usable.
+- **Flow video plumbing is proven live** — image → Flow → saved MP4 (`generateOne` runs end-to-end: mode-select, start-frame upload, submit, reload/rescan, completed-tile discovery, MP4 download, state=`saved`).
 
-## Latest Phase 0 Checkpoint
-- `src/node/video/video_state.cjs` exists and reconciles prompt/image/video state into `data/.cca/video_state.json`.
-- `src/node/workers/submit_videos.cjs` exits non-zero for submission errors, including missing source images.
-- `src/node/workers/save_videos.cjs` exits code `6` on non-watch zero-progress idle timeout.
-- Focused Node tests pass for submitter exit codes, saver timeout parsing, and video state reconciliation.
+## Single active priority
+- **Flow start-frame fidelity.** The live full-cycle proof saved an MP4, but Flow rendered a *prompt-generated* clip, **not our uploaded image animated** (frame 0 ≠ input PNG). `verifyStartFrameAttached` passed as a false positive. Fix = inspect the Flow `Start` drop zone live after upload, confirm true image-to-video mode, and harden the attachment check to match *our* file. Full finding in [WISHLIST.md](WISHLIST.md).
 
-## Latest Phase 1 Checkpoint
-- `src/node/video/video_errors.cjs` classifies quota, subscription, policy, failed-tile, and login blockers.
-- `src/node/video/video_download.cjs` saves MP4s from `data:`, `blob:`, and authenticated HTTP(S) sources with atomic writes.
-- `src/node/video/flow_adapter.cjs` exposes `generateOne()` for one Flow clip.
-- `src/node/workers/submit_flow_videos.cjs` is the smoke CLI: `node src/node/workers/submit_flow_videos.cjs <prompts.json> --limit 1 --max-in-flight 1`.
-- Focused Node tests pass for Phase 0 and Phase 1 modules.
+## Current video decision
+- Production video target is Google Flow / Veo via `labs.google/fx/tools/flow`, on Ultra/Pro Business Flow credits; Gemini app video is fallback/smoke only.
+- Default concurrency `CCA_VIDEO_MAX_IN_FLIGHT=1`; raise only after live failed-tile data supports it.
+- Notion upload stays image-only until the one-clip Flow path is faithful.
 
-## Latest Phase 2 Checkpoint
-- `src/node/video/video_batch.cjs` summarizes batch progress, selects retryable items, caps exhausted retries, detects no-progress loops, and chooses aggregate exit codes.
-- `src/node/orchestrators/run_videos_autonomous.cjs` is the sequential batch CLI: `node src/node/orchestrators/run_videos_autonomous.cjs <prompts.json> --limit <N> --max-attempts 3 --max-no-progress 3`.
-- `submit_flow_videos.cjs` already exposes a programmatic worker API and supports injected adapter/browser dependencies for tests; no worker API patch was needed in Phase 2.
-- Live Flow smoke reached real Flow video generation. User observed after reload that two generated videos appeared in All Media, so the worker's failed-tile result was a false negative caused by post-submit discovery/reload handling.
-- The remaining smoke gap is completed-tile rediscovery, MP4 download, and proof that the source image is attached as the start frame rather than producing prompt-only videos.
-- Phase 2 is code-scaffolded, but not production-ready until one image-to-video Flow clip saves successfully and a small sequential Flow batch is verified.
-
-## Current Video Decision
-- Production video target is Google Flow / Veo through `labs.google/fx/tools/flow`.
-- Available Ultra/Pro Business Flow credits make Flow the correct batch target.
-- Gemini app video remains fallback/smoke-test only due to usage limits.
-- Start with `max_in_flight=1`; increase only after failed-tile behavior is measured.
-- Do not resurrect v4's missing `animate_flow.cjs`; rebuild around explicit state and blockers.
-
-## What To Read First
-1. `MASTER_MEMORY.md`
-2. `ROADMAP.md`
-3. `docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md`
-4. `README.md`
-5. `docs/ops/TROUBLESHOOTING.md`
-6. `docs/core/ARCHITECTURE.md`
+## What to read first
+1. `MASTER_MEMORY.md` → 2. `ROADMAP.md` → 3. `WISHLIST.md` (start-frame finding) → 4. `docs/core/FLOW_VIDEO_IMPLEMENTATION_PLAN.md` → 5. `docs/ops/TROUBLESHOOTING.md`
 
 ## Notes
-- Keep these files concise and current.
-- Do not add code, runtime config, or generated artifacts here.
-- Do not add these root notes to `.gitignore`; they are intended project memory.
+- Keep these root notes concise and current; do not add code, runtime config, or generated artifacts here.
+- These are intended project memory — not gitignored.

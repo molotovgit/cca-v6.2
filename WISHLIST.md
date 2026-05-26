@@ -1,84 +1,50 @@
 # Wishlist
 
-Backlog ideas and follow-ons for the content automation pipeline.
+Backlog / follow-ons for the content automation pipeline. Most of the prior backlog
+(video hardening, workspace setup, browser/account resilience, test coverage + CI)
+shipped in the 2026-05-26→27 cleanup cycle — see [ROADMAP.md](ROADMAP.md) "Completed".
+What remains is below.
 
-Related planning notes: [MASTER_MEMORY.md](MASTER_MEMORY.md), [MEMORY_INDEX.md](MEMORY_INDEX.md), [ROADMAP.md](ROADMAP.md).
+Related: [MASTER_MEMORY.md](MASTER_MEMORY.md), [MEMORY_INDEX.md](MEMORY_INDEX.md), [ROADMAP.md](ROADMAP.md).
 
-## Pipeline hardening
+## Flow start-frame fidelity (TOP — found in the 2026-05-27 live full-cycle proof)
 
-- Add stronger failure detection around video script execution.
-- Make video orchestration resumable at every stage boundary.
-- Add explicit timeouts and retry policy for all network-bound steps.
-- Capture richer run metadata for postmortems and trend analysis.
-- Add a single health check that verifies the workspace before a run starts.
+The full cycle now runs end-to-end live: a Gemini image (`THE ATOM` chalkboard title
+card) → `submit_flow_videos.cjs … --limit 1` → Flow → **saved MP4** (`video_state.json`
+state=`saved`, valid 1.1 MB MP4, no failure path). The plumbing is proven.
 
-## Video workflow
+**But the rendered video is NOT our image animated** — it's a *prompt-generated* atom
+title card (different composition: colorful 3D ball-and-stick models + a "Building Blocks
+of Matter" subtitle, none of our white-chalk `E=mc²`/`H-O-H` diagrams). The extracted
+frame 0 does not match the input PNG, and the whole 4s clip is the regenerated version.
+This is exactly the gap Codex flagged ("renders look prompt-generated").
 
-- Harden the video animation pipeline until failures are visible and recoverable.
-- Create a video equivalent of the image autonomous orchestrator.
-- Detect Gemini video-specific quota, safety, subscription, and render-failed banners.
-- Exit non-zero when video submit/save completes with errors or missing outputs.
-- Add guardrails for missing assets, partial renders, and stale intermediate files.
-- Improve validation for generated video inputs before rendering begins.
-- Add end-to-end checks that confirm a successful upload after render completion.
+Key issue: `flow_adapter.verifyStartFrameAttached` **passed (false positive)** — it
+detected *a* thumbnail/filename in a Start-labelled zone, but Flow did not honor our
+upload as frame 0. To fix:
+- Re-run with the Flow composer **screenshotted right after upload** to see whether *our*
+  image is actually loaded in the `Start` drop zone (vs. a stray/preview element the
+  heuristic matched).
+- Confirm the mode is genuinely **image-to-video / Frames** with the start frame bound
+  (not text-to-video that ignores the image).
+- Harden `verifyStartFrameAttached` to assert the Start slot holds *our* file (filename /
+  thumbnail match), not just any image — so a non-honored upload fails loudly instead of
+  producing a misleading "saved" prompt-clip.
+- Reference: input `data/images/smoke/full-cycle/001-intro.png`; output
+  `data/videos/smoke/full-cycle/001-intro.mp4`; the probe's known download seam works.
 
-## Flow video — post-smoke fixes (from 2026-05-26 live smoke)
+## Video pipeline follow-ons (after start-frame is honored)
+- Live sequential batch via `run_videos_autonomous.cjs --limit <N>`, then concurrency
+  tuning `--max-in-flight 2/3/4` against real failed-tile rates (default stays 1).
+- Wire **Notion video upload** — UPLOAD is image-only today (MP4s land on disk only).
+- Add an end-to-end check that confirms a successful Notion upload after render.
 
-Found during Codex's first live Flow smoke test (6 attempts, all ended `failed_ui`).
-The automation never reached a completed video tile over CDP — the only evidence Flow
-rendered is the user manually reloading and seeing two videos in All Media. These all
-block calling Phase 2 production-ready.
-
-**Update 2026-05-26 (shipped to DaddysBranch):** reload/rescan, completed-tile
-discovery, MP4 download (PROVEN live), failed-card-non-terminal, and the completed-tile
-DOM capture (via `flow_probe`) are all DONE. The one remaining open item below is
-proving the source image actually attaches as the start frame.
-
-- Select Video mode explicitly before generating. Flow's model dropdown defaults to
-  `Nano Banana 2` = image mode (`Generating will use 0 credits`); several smoke attempts
-  silently ran in image mode and produced no video. `configureVideoMode` must confirm
-  the create row shows `Video · 4s` (15 credits) before submit.
-- Attach the start frame via the unlabeled left `Start` drop zone. Frames mode has no
-  labeled upload button — only large unlabeled `Start`/`End` role-button drop zones
-  (`Start swap_horiz Swap first and last frames End`). `uploadStartFrame` must target the
-  Start slot and CONFIRM the PNG bound (thumbnail/filename); attachment was never proven
-  and renders looked prompt-generated.
-- Reload/rescan after submit before judging the result. `waitForCompletion` polls only
-  the live generating view and throws when its failed-tile grace window expires. Need:
-  submit → reload the project URL → open the `Videos` / `All Media` tab → match the new
-  tile → then decide.
-- Treat the `warning Failed … Reuse Prompt … Delete image … 99%` card as non-terminal.
-  It persisted next to a fresh `play_circle 0%` render and proved a false negative after
-  reload. Disambiguate by correlating it against a post-reload Videos-tab scan, not by
-  hard-failing on the card.
-- Capture the completed-tile DOM and MP4 download mechanism — both are UNKNOWN. No live
-  run ever reached a finished tile, so `findDownloadTarget`/`DOWNLOAD_TEXTS` and the
-  `blob:rendered` test fixture are unverified guesses. The next live run is partly a
-  discovery task: record the done-tile selectors and whether download is a `<video>` src,
-  a per-tile menu, or needs network interception. Then one image → one saved MP4 in
-  `data/videos/...` with `video_state.json` = `saved`.
-
-## Fetch and upload
-
-- Fix `args.lang` typos in fetch and upload paths.
-- Normalize argument parsing so language selection is consistent across stages.
-- Add tests for language-specific fetch and upload behavior.
-
-## Browser and account handling
-
-- Add `playwright-stealth` where browser automation needs anti-detection support.
-- Fix the account path mismatch so runtime and docs point to the same location.
-- Improve account rotation diagnostics when login or reuse fails.
-
-## Docs and setup
-
-- Fix setup and docs path issues.
-- Align quickstart, deployment, and troubleshooting references with current file names.
-- Add a compact workspace checklist for first-run setup and validation.
-
-## Test coverage
-
-- Add regression tests for the known video failure modes.
-- Add tests for argument parsing, file path resolution, and account lookup.
-- Add smoke tests that exercise fetch, video, and upload in sequence.
-- Add a minimal CI gate that blocks merges on broken orchestration paths.
+## Smaller follow-ons
+- Reconcile the 2 `xfail`'d `test_notion_navigator` cases (`2-3-mavzu` chapter-range
+  parsing + unnumbered-chapter positional fallback) — decide intended behavior, then fix
+  code or test.
+- Richer run metadata / trend analysis for postmortems (the rotation/blocker JSONL event
+  logs exist; aggregation + a dashboard view do not).
+- A true fetch→refine→prompts→images→upload smoke (current coverage is per-helper unit
+  tests + CI, not one end-to-end run).
+- `AGENTS.md` (contributor-guidelines doc, currently untracked) — commit or discard.
