@@ -11,6 +11,9 @@
 const puppeteer = require('puppeteer');
 const path      = require('path');
 const fs        = require('fs');
+// Additive diagnostics (ROADMAP Phase 3, Lane B). Best-effort JSONL of blocker
+// events alongside the existing blocker_alerts.json — never alters control flow.
+const diag      = require('../utils/diag_events.cjs');
 
 const CDP_PORT  = parseInt(process.env.GEMINI_CDP_PORT || '9223', 10);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -21,6 +24,8 @@ const STATE_DIR = path.join(REPO, 'data', '.cca');
 const TAB_MAP_FILE       = path.join(STATE_DIR, 'tab_map.json');
 const SAVED_FILE         = path.join(STATE_DIR, 'saved_indices.json');
 const BLOCKER_ALERTS_FILE = path.join(STATE_DIR, 'blocker_alerts.json');
+// Additive diagnostics sink: append-only JSONL of blocker events.
+const BLOCKER_EVENTS_FILE = path.join(STATE_DIR, 'blocker_events.jsonl');
 
 // v6.2: per-saver download intercept dir. The in-chat <img> blob is a 1024x572
 // preview; the real generated image (2752x1536 / 2528x1696) only arrives via
@@ -109,6 +114,12 @@ function recordBlocker(idx, slug, type) {
   // Keep last 200 only
   if (alerts.length > 200) alerts.splice(0, alerts.length - 200);
   writeJson(BLOCKER_ALERTS_FILE, alerts);
+  // DIAG (additive): also append a structured blocker event to the JSONL stream.
+  // Best-effort and wrapped — must never affect the existing alert write or the
+  // saver's control flow.
+  try {
+    diag.appendEvent(BLOCKER_EVENTS_FILE, diag.formatEvent({ type: 'blocker', idx, slug, blockerType: type }), { fs });
+  } catch (_) { /* diagnostics are best-effort */ }
 }
 
 // Orphan recovery: scan every Gemini conversation tab and return entries
