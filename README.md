@@ -4,10 +4,16 @@ A 5-stage pipeline that turns a textbook chapter on Notion into 80 illustrated
 prompts, generates images via Google Gemini, and uploads the result back to
 the chapter's Notion page. Designed to run unattended across many hosts.
 
-Video automation is being rebuilt as a Flow-first path. The current codebase has
-a one-clip Flow smoke worker and supporting state/error/download modules, but
-the live Flow UI smoke run still needs to be executed and tuned before batch
-video production is considered ready.
+Video automation is an **opt-in** Flow-first stage. Set `CCA_ENABLE_VIDEO=1` to
+run a VIDEOS stage after IMAGES and before UPLOAD; `CCA_VIDEO_MAX_IN_FLIGHT`
+(default 1, clamped to `[1,4]`) controls in-flight Flow clips. The video stage is
+**best-effort and non-fatal** — it never blocks or fails a chapter, image UPLOAD
+always proceeds, and generated MP4s land under `data/videos/...` but are **not**
+uploaded to Notion yet (image upload stays separate until video upload is
+verified). With the flag unset (the default), you get the unchanged 5-stage
+image pipeline. The stage is still experimental and needs live Flow UI validation
+before batch video production is considered ready — see the **Flow video** section
+of [docs/ops/TROUBLESHOOTING.md](docs/ops/TROUBLESHOOTING.md).
 
 ```
 FETCH ─→ REFINE ─→ PROMPTS ─→ IMAGES ─→ UPLOAD

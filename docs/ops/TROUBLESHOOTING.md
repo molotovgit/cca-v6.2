@@ -7,6 +7,83 @@ Bugs and recoveries we've actually hit, root-caused, and fixed. Newest first.
 
 ---
 
+## Flow video — enabling, blockers, and exit codes
+
+> **Status: experimental / opt-in, live-validation pending.** The one-clip
+> download path is proven (MP4s download via the authenticated
+> `media.getMediaUrlRedirect` URL), but a full live one-clip `generateOne`
+> (generate → reload → download → saved) and start-frame attachment are not yet
+> validated. Treat the video stage as best-effort until live runs confirm it.
+
+**How to enable**: the video stage is OPT-IN and off by default. Set the env
+flag before running the per-chapter pipeline (`src/node/orchestrators/run_pipeline.cjs`):
+
+```bash
+CCA_ENABLE_VIDEO=1
+```
+
+When set, the video stage runs **after** IMAGES and invokes
+`src/node/orchestrators/run_videos_autonomous.cjs` (Flow video via
+`labs.google/fx/tools/flow`). It is **non-fatal/best-effort**: it never blocks
+or fails the chapter, and the image UPLOAD always proceeds. With the flag unset,
+you get the existing 5-stage image pipeline, unchanged.
+
+Generated MP4s land on disk under `data/videos/...`. Notion UPLOAD stays
+**image-only** for now — videos are **not** uploaded to Notion yet (upload is
+kept separate until video upload is verified). If you enabled video and don't
+see clips in Notion, that's expected; check `data/videos/...` on disk instead.
+
+**Chrome CDP `:9223` requirement**: Flow drives the **Gemini** Chrome profile,
+which must be reachable on CDP port 9223. The profile lives under `$HOME`. Launch
+it so the port actually opens:
+
+```bash
+open -na "Google Chrome" --args --remote-debugging-port=9223 \
+  --user-data-dir="$HOME/data/chrome_gemini_profile" \
+  "<flow-url>"
+```
+
+> `nohup` does **not** open the port — launch with `open -na` as above. If
+> `curl -s http://127.0.0.1:9223/json/version` returns nothing, the port isn't
+> up and the video stage will report a session/login blocker.
+
+**Reading blockers and screenshots**: the video stage records progress and the
+most recent blocker in `data/.cca/video_state.json`, and drops debug screenshots
+under `data/.cca/flow_screenshots/`. To diagnose a stuck or skipped clip:
+
+```bash
+python -m json.tool data/.cca/video_state.json   # saved/total, state counts, last blocker
+ls -t data/.cca/flow_screenshots/                 # newest screenshot first
+```
+
+The dashboard at `http://localhost:7777` surfaces the same data in a **Video
+panel** (saved/total, state counts, last blocker, last screenshot) whenever
+`data/.cca/video_state.json` exists.
+
+**Discovery harness**: when the Flow UI shifts and selectors stop matching, use
+`src/node/workers/flow_probe.cjs` to connect to the live Flow Chrome (CDP 9223)
+and inspect the current page — buttons, labels, and clip card states — before
+adjusting the adapter.
+
+**"Failed … 99%" is non-terminal**: a transient render card stuck at
+`Failed … 99%` is **not** a real failure. Reloading the Flow page usually
+reveals the actual finished render — don't treat the transient card as a
+terminal error.
+
+**Common video exit codes** (from `run_videos_autonomous.cjs` /
+`src/node/video/video_errors.cjs`):
+
+| Code | Meaning |
+|---|---|
+| `4` | Quota / subscription block — credits exhausted or account not eligible |
+| `5` | Policy block — the motion prompt or start frame was content-filtered |
+| `6` | Timeout — no progress within the no-progress window (raise concurrency only after live tuning) |
+
+Because the stage is best-effort, these codes are logged for the video stage
+only and never propagate to fail the chapter — image UPLOAD still runs.
+
+---
+
 ## Pipeline halts with `ImportError: DLL load failed while importing _greenlet`
 
 **Where you'll see it**: `reports/batch_pipeline.log` at STAGE 2 (REFINE),
