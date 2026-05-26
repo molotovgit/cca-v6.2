@@ -75,7 +75,7 @@ the acceptable length range, and writes:
 - `data/refined/.../ch{nn}-{title-slug}.meta.json`
 
 ChatGPT account rotation: on rate-limit (exit code 50), the orchestrator
-rotates `accounts.json[chatgpt]` to the next entry, runs `src/python/auth/auto_login.py
+rotates `data/accounts.json[chatgpt]` to the next entry, runs `src/python/auth/auto_login.py
 --skip-gemini --force-resignin`, and retries.
 
 ### Stage 3 — PROMPTS
@@ -104,7 +104,7 @@ orchestrated by `src/node/orchestrators/run_autonomous.cjs`:
 
 | Process | Script | Role |
 |---------|--------|------|
-| Submitter | `src/node/workers/submit_prompts.cjs` | Opens up to N tabs (default 10) at gemini.google.com, types each prompt, clicks Send, records `(tab_id → entry)` in `.cca/tab_map.json`. Fire-and-forget; doesn't wait for image. |
+| Submitter | `src/node/workers/submit_prompts.cjs` | Opens up to N tabs (default 10) at gemini.google.com, types each prompt, clicks Send, records `(tab_id → entry)` in `data/.cca/tab_map.json`. Fire-and-forget; doesn't wait for image. |
 | Saver | `src/node/workers/save_images.cjs` | Polls open tabs, downloads the full-size JPEG once the image is rendered, writes it to `data/images/.../ch{nn}/{idx:03}-{slug}.png`, closes the tab. |
 | Watchdog | `src/node/orchestrators/run_autonomous.cjs` (parent) | Watches the saver; if it stalls > 180 s, runs `src/node/utils/rescue_zombie_tabs.cjs` to close pending tabs and re-spawns the saver with a fresh state. |
 | Upscaler | `src/python/utils/upscale_watcher.py` | Optional. Tails `data/images/.../ch{nn}/` and post-processes each new PNG to 2560×1440. Default DISABLED in v6.2. |
@@ -178,11 +178,12 @@ see the **Flow video** section in [TROUBLESHOOTING.md](../ops/TROUBLESHOOTING.md
 cca-v6.2/
 ├── README.md                 ← project overview + quick links
 ├── CHANGELOG.md              ← notable changes per version
-├── .cca/                     ← runtime state (active_accounts, tab_map)
 ├── config/                   ← prompts and examples
 │   ├── examples/             ← copy these and fill in values
 │   └── prompts/              ← Stage 2 & 3 prompt templates
 ├── data/                     ← all generated content and runtime state
+│   ├── .cca/                 ← runtime state (active_accounts, tab_map)
+│   ├── accounts.json         ← multi-account rotation list (gitignored)
 │   ├── chapters/             ← Stage 1 output
 │   ├── refined/              ← Stage 2 output
 │   ├── prompts/              ← Stage 3 output
@@ -229,10 +230,10 @@ either source code or runtime state. Runtime state lives in three places:
 | File / dir | Owner | Purpose |
 |---|---|---|
 | `.env` | launcher writer | Notion API key + email/password env vars (gitignored) |
-| `accounts.json` | launcher writer | Full multi-account rotation list (gitignored) |
-| `.cca/active_accounts.json` | `src/python/auth/accounts.py` | Current active index per provider |
-| `.cca/tab_map.json` | submit/save | Open tab → prompt entry mapping |
-| `.cca/saved_indices.json` | save_images | Indices known to be on disk |
+| `data/accounts.json` | launcher writer | Full multi-account rotation list (gitignored) |
+| `data/.cca/active_accounts.json` | `src/python/auth/accounts.py` | Current active index per provider |
+| `data/.cca/tab_map.json` | submit/save | Open tab → prompt entry mapping |
+| `data/.cca/saved_indices.json` | save_images | Indices known to be on disk |
 | `lessons.txt` | launcher writer / human | Chapter list to process |
 | `logs/pipeline.log` | wrapper.bat | Stdout/stderr of one batch run |
 | `chrome-chatgpt-cdp/` | Chrome | Persistent ChatGPT profile (cookies) |
@@ -246,7 +247,7 @@ Both ChatGPT and Gemini run with a list of credentialed accounts. The rotator
 (`src/python/auth/accounts.py`) cycles them when a rate-limit is detected:
 
 ```json
-// accounts.json (gitignored)
+// data/accounts.json (gitignored)
 {
   "chatgpt": [
     { "label": "primary", "email": "a@x", "password": "..." }
@@ -315,7 +316,7 @@ signed in (or `src/python/auth/auto_login.py` has) the sessions stay live for da
 `0.0.0.0:7777`. The browser polls `/status` every 2 s for JSON state:
 
 - **Image count** — derived from on-disk `data/images/.../ch{nn}/*.png` listing.
-- **Account state** — read from `accounts.json` + `.cca/active_accounts.json`.
+- **Account state** — read from `data/accounts.json` + `data/.cca/active_accounts.json`.
 - **Stage progression** — derived per lesson (FETCH/REFINE/PROMPTS/IMAGES/UPLOAD ✓ checks).
 - **Recent log lines** — last 30 lines of the most-recently-modified file in `reports/batch_*.log`.
 - **Video panel** — shown only when `data/.cca/video_state.json` exists; reports saved/total, state counts, last blocker, and the last screenshot from the opt-in VIDEOS stage.

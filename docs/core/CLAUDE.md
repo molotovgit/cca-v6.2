@@ -24,10 +24,10 @@ Each stage is idempotent — skips if its output is already on disk. Per-chapter
 | `src/node/workers/submit_prompts.cjs` | Opens Gemini tabs, types prompts. Tags tabs in `.cca/tab_map.json`. |
 | `src/node/dashboard/dashboard.cjs` | http://localhost:7777 live status board (binds 127.0.0.1). |
 | `src/python/auth/auto_login.py` | Multi-account sign-in. Reads `accounts.json` (preferred) or falls back to `.env` env vars. |
-| `src/python/auth/accounts.py` | Rotator. CLI: `python -m src.python.auth.accounts {get|rotate|reset|status} <provider>`. State in `.cca/active_accounts.json`. |
+| `src/python/auth/accounts.py` | Rotator. CLI: `python -m src.python.auth.accounts {get|rotate|reset|status} <provider>`. State in `data/.cca/active_accounts.json`. |
 | `src/python/drivers/browser/gemini.py` | Gemini login flow + image capture helpers. Includes the human-SSO state machine. |
 | `src/python/pipeline/upload_images.py` | Stage 5. Zip rebuild logic + Notion multipart upload + `.uploaded.json` marker. |
-| `accounts.json` (**gitignored**) | Credentials list, rotation source of truth. Schema in `config/examples/accounts.json.example`. |
+| `data/accounts.json` (**gitignored**) | Credentials list, rotation source of truth. Schema in `config/examples/accounts.json.example`. |
 | `.env` (**gitignored**) | Notion API key + Chrome ports + legacy ChatGPT/Gemini env vars. |
 
 ## Launcher pattern (the repo ships no end-user launcher)
@@ -77,7 +77,7 @@ Triggered by either:
 Sequence (`run_autonomous.cjs::triggerRotation`):
 
 1. Kill submit + saver children
-2. `python -m src.python.auth.accounts rotate gemini` — advances `.cca/active_accounts.json`. Exit 2 = NoMoreAccountsError → orchestrator exits 4.
+2. `python -m src.python.auth.accounts rotate gemini` — advances `data/.cca/active_accounts.json`. Exit 2 = NoMoreAccountsError → orchestrator exits 4.
 3. `python src/python/auth/auto_login.py --skip-chatgpt --force-resignin` — signs out, signs in to the new account
 4. Reset `.cca/tab_map.json` and `.cca/blocker_alerts.json` (old tabs were bound to the old account)
 5. **Preserve `.cca/saved_indices.json`** — resume from the same image index
