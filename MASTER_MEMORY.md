@@ -65,6 +65,7 @@ Build an education startup pipeline that turns Notion textbook chapters into AI-
 - 2026-05-26: Phase 1 Flow smoke worker checkpoint complete. `src/node/workers/submit_flow_videos.cjs` supports `--limit` and smoke-only `--max-in-flight 1`, reconciles video state, selects retryable items, opens a Flow page, calls `flow_adapter.generateOne()`, and writes item state after each attempt.
 - 2026-05-26: Documentation cleanup checkpoint. README, architecture, runbook, Project Overview, memory, roadmap, and Flow plan now describe the Flow smoke code path as code-complete but not live-validated.
 - 2026-05-26: Workspace cleanup checkpoint. Removed temporary sub-agent worktrees and `agent/*` branches from Phase 0/1 delegation. Removed Python test/cache artifacts (`__pycache__`, `.pytest_cache`). Did not broad-clean ignored runtime state (`data/`, `.swarm/`, `.claude/`) or evidence file `cca_v4.zip`.
+- 2026-05-26: Started Phase 2 sequential-batch implementation. Target is `run_videos_autonomous.cjs` plus focused batch-progress/retry helpers: resume from `video_state`, process Flow clips one at a time, stop on quota/policy, bound retries/no-progress, and keep live Flow smoke as a required validation gate before production batch use.
 
 ## Index Links
 - [MEMORY_INDEX.md](MEMORY_INDEX.md)
