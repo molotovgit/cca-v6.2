@@ -7,7 +7,7 @@ What remains is below.
 
 Related: [MASTER_MEMORY.md](MASTER_MEMORY.md), [MEMORY_INDEX.md](MEMORY_INDEX.md), [ROADMAP.md](ROADMAP.md).
 
-## Flow start-frame fidelity (TOP — found in the 2026-05-27 live full-cycle proof)
+## Flow start-frame fidelity (TOP — fixed in code, pending live proof)
 
 The full cycle now runs end-to-end live: a Gemini image (`THE ATOM` chalkboard title
 card) → `submit_flow_videos.cjs … --limit 1` → Flow → **saved MP4** (`video_state.json`
@@ -19,17 +19,20 @@ of Matter" subtitle, none of our white-chalk `E=mc²`/`H-O-H` diagrams). The ext
 frame 0 does not match the input PNG, and the whole 4s clip is the regenerated version.
 This is exactly the gap Codex flagged ("renders look prompt-generated").
 
-Key issue: `flow_adapter.verifyStartFrameAttached` **passed (false positive)** — it
-detected *a* thumbnail/filename in a Start-labelled zone, but Flow did not honor our
-upload as frame 0. To fix:
-- Re-run with the Flow composer **screenshotted right after upload** to see whether *our*
-  image is actually loaded in the `Start` drop zone (vs. a stray/preview element the
-  heuristic matched).
-- Confirm the mode is genuinely **image-to-video / Frames** with the start frame bound
-  (not text-to-video that ignores the image).
-- Harden `verifyStartFrameAttached` to assert the Start slot holds *our* file (filename /
-  thumbnail match), not just any image — so a non-honored upload fails loudly instead of
-  producing a misleading "saved" prompt-clip.
+Root cause: `uploadStartFrame` used the global toolbar `input[type=file]`, so the image
+landed in Flow's media library instead of the compact `Start` slot. `verifyStartFrameAttached`
+then passed as a false positive by matching a full-page Start-labelled container plus any
+image.
+
+Fix implemented: `flow_adapter.cjs` now clicks the real compact Start chip, waits for the
+media picker, dismisses the first-upload Notice, uploads/selects the tile, clicks `Add to
+Prompt`, and fails closed unless a thumbnail/filename is actually near the compact Start
+slot. `flow_ui.START_SLOT` now matches the live ~50x50 Start chip.
+
+Remaining proof:
+- Re-run one live Flow clip with the composer screenshotted right after Start-slot binding.
+- Confirm the mode remains **Video + Frames** and the Start chip contains our thumbnail.
+- Confirm the saved MP4 frame 0 matches the input PNG before enabling production video.
 - Reference: input `data/images/smoke/full-cycle/001-intro.png`; output
   `data/videos/smoke/full-cycle/001-intro.mp4`; the probe's known download seam works.
 

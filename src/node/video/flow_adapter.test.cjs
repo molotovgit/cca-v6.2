@@ -10,6 +10,7 @@ const {
   FlowAdapterError,
   awaitCompletedTile,
   buildScreenshotPath,
+  ensureProjectComposer,
   findCompletedTile,
   generateOne,
   hasActiveRenderProgress,
@@ -18,6 +19,8 @@ const {
   resolveDownloadHelper,
   resolveEntryUrl,
   safePart,
+  findStartFrameDropTarget,
+  findStartThumbnail,
   verifyStartFrameAttached,
   verifyVideoMode,
 } = require('./flow_adapter.cjs');
@@ -122,13 +125,7 @@ test('generateOne saves one MP4 on the happy path', async () => {
   fs.writeFileSync(imagePath, Buffer.alloc(1024));
 
   const calls = [];
-  const page = makePage(calls, {
-    fileInput: {
-      uploadFile: async (files) => {
-        calls.push(['uploadFile', files]);
-      },
-    },
-  });
+  const page = makePage(calls);
 
   const result = await generateOne({
     page,
@@ -140,6 +137,21 @@ test('generateOne saves one MP4 on the happy path', async () => {
       flowUrl: 'https://labs.google/fx/tools/flow',
       classifyPage: async () => null,
       ...videoModeSeams(),
+      findUploadControl: async () => ({ x: 10, y: 11 }),
+      waitForMediaPickerDialog: async () => true,
+      dismissUploadNotice: false,
+      uploadMediaThroughPicker: async (_page, uploadedPath) => {
+        calls.push(['pickerUpload', uploadedPath]);
+        return { mode: 'dialog-file-chooser' };
+      },
+      selectUploadedMediaTile: async (_page, uploadedPath) => {
+        calls.push(['selectUploadedTile', path.basename(uploadedPath)]);
+        return { x: 12, y: 13 };
+      },
+      addUploadedMediaToPrompt: async () => {
+        calls.push(['addToPrompt']);
+        return { x: 14, y: 15 };
+      },
       findPromptControl: async () => ({ x: 20, y: 30 }),
       findSubmitControl: async () => ({ x: 40, y: 50 }),
       findDownloadTarget: async () => ({ kind: 'video', src: 'blob:rendered' }),
@@ -156,7 +168,9 @@ test('generateOne saves one MP4 on the happy path', async () => {
   assert.equal(result.videoPath, videoPath);
   assert.equal(fs.statSync(videoPath).size >= 50 * 1024, true);
   assert.deepEqual(calls[0][0], 'goto');
-  assert.deepEqual(calls.find(entry => entry[0] === 'uploadFile'), ['uploadFile', imagePath]);
+  assert.deepEqual(calls.find(entry => entry[0] === 'pickerUpload'), ['pickerUpload', imagePath]);
+  assert.deepEqual(calls.find(entry => entry[0] === 'selectUploadedTile'), ['selectUploadedTile', '001-demo.png']);
+  assert.deepEqual(calls.find(entry => entry[0] === 'addToPrompt'), ['addToPrompt']);
   assert.deepEqual(calls.find(entry => entry[0] === 'type'), ['type', 'slow camera orbit around the subject']);
   assert.deepEqual(calls.find(entry => entry[0] === 'download'), ['download', { kind: 'video', src: 'blob:rendered' }]);
 });
@@ -251,14 +265,74 @@ test('verifyVideoMode throws when video-mode confirmation is absent', async () =
   );
 });
 
+test('verifyVideoMode passes on a fresh composer that shows no credits text yet', async () => {
+  // A fresh project defaults to "Video · 4s 16:9 1x"; the "generating will use N
+  // credits" string only appears once a start frame + prompt are staged, which
+  // is after this pre-upload check. The toggle alone must be enough.
+  const ok = await verifyVideoMode({}, {
+    readVideoModeText: async () => 'Video · 4s crop_16_9 1x Start creating or drop media',
+  });
+  assert.equal(ok, true);
+});
+
+test('verifyVideoMode throws when Flow surfaces an explicit zero credit cost in video mode', async () => {
+  await assert.rejects(
+    () => verifyVideoMode({}, {
+      readVideoModeText: async () => 'Video · 4s 16:9 Generating will use 0 credits',
+    }),
+    (err) => {
+      assert.equal(err.state, 'failed_ui');
+      assert.equal(err.stage, 'verify_video_mode');
+      assert.match(err.message, /0 credits/i);
+      return true;
+    }
+  );
+});
+
+// A2) ensureProjectComposer -------------------------------------------------
+
+test('ensureProjectComposer is a no-op when already inside a project composer', async () => {
+  const calls = [];
+  const page = {
+    url: () => 'https://labs.google/fx/tools/flow/project/abc123',
+    evaluate: async () => { calls.push('evaluate'); return null; },
+    mouse: { click: async () => { calls.push('click'); } },
+  };
+  const out = await ensureProjectComposer(page, {});
+  assert.match(out, /\/project\/abc123/);
+  assert.deepEqual(calls, []); // never tried to click "New project"
+});
+
+test('ensureProjectComposer clicks New project from the dashboard and returns the composer url', async () => {
+  let navigated = false;
+  const calls = [];
+  const page = {
+    url: () => navigated
+      ? 'https://labs.google/fx/tools/flow/project/new789'
+      : 'https://labs.google/fx/tools/flow',
+    // clickVisibleButton evaluate: return a clickable target for /new project/i
+    evaluate: async () => ({ x: 12, y: 34, text: 'New project', area: 999 }),
+    mouse: { click: async (x, y) => { calls.push(['click', x, y]); navigated = true; } },
+    waitForFunction: async () => true,
+  };
+  const out = await ensureProjectComposer(page, { readyTimeoutMs: 10, readySettleMs: 0 });
+  assert.match(out, /\/project\/new789/);
+  assert.ok(calls.some((c) => c[0] === 'click'), 'should click the New project control');
+});
+
+test('ensureProjectComposer honours the disable seam', async () => {
+  const out = await ensureProjectComposer({ url: () => 'https://labs.google/fx/tools/flow' }, {
+    ensureProjectComposer: false,
+  });
+  assert.equal(out, null);
+});
+
 test('generateOne throws when the model dropdown stayed in image mode', async () => {
   const dir = tempDir('flow-imgmode-');
   const imagePath = path.join(dir, '001-demo.png');
   fs.writeFileSync(imagePath, Buffer.alloc(1024));
   const calls = [];
-  const page = makePage(calls, {
-    fileInput: { uploadFile: async () => {} },
-  });
+  const page = makePage(calls);
 
   await assert.rejects(
     () => generateOne({
@@ -289,14 +363,92 @@ test('verifyStartFrameAttached returns the thumbnail when the Start slot is fill
   assert.deepEqual(thumb, { kind: 'filename', text: 'demo.png' });
 });
 
+function makeElement({ text = '', attrs = {}, rect = {}, children = [], parent = null }) {
+  const el = {
+    textContent: text,
+    parentElement: parent,
+    children,
+    getAttribute: (name) => attrs[name] || null,
+    getBoundingClientRect: () => ({
+      left: rect.left ?? 0,
+      top: rect.top ?? 0,
+      width: rect.width ?? 50,
+      height: rect.height ?? 50,
+      bottom: (rect.top ?? 0) + (rect.height ?? 50),
+      right: (rect.left ?? 0) + (rect.width ?? 50),
+    }),
+    querySelector: (selector) => {
+      if (!/img|video|background-image/.test(selector)) return null;
+      return children.find(child => child.kind === 'thumb') || null;
+    },
+  };
+  for (const child of children) child.parentElement = el;
+  return el;
+}
+
+function makeElementsPage(elements) {
+  return {
+    evaluate: async (fn, ...args) => {
+      const prevDoc = global.document;
+      const prevWin = global.window;
+      const prevElement = global.Element;
+      global.Element = function Element() {};
+      const flatten = (items) => items.flatMap(el => [el, ...(el.children ? flatten(el.children) : [])]);
+      const all = flatten(elements);
+      for (const el of all) Object.setPrototypeOf(el, global.Element.prototype);
+      global.document = { querySelectorAll: () => elements.slice() };
+      global.window = {
+        innerWidth: 1920,
+        innerHeight: 963,
+        getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+      };
+      try {
+        return await fn(...args);
+      } finally {
+        global.document = prevDoc;
+        global.window = prevWin;
+        global.Element = prevElement;
+      }
+    },
+  };
+}
+
+test('findStartFrameDropTarget finds the real compact Start chip', async () => {
+  const fullViewport = makeElement({ text: 'Start creating or drop media', rect: { width: 1920, height: 963 } });
+  const start = makeElement({ text: 'Start', rect: { left: 670, top: 800, width: 50, height: 50 } });
+  const target = await findStartFrameDropTarget(makeElementsPage([fullViewport, start]));
+  assert.equal(target.text, 'start');
+  assert.equal(target.width, 50);
+  assert.equal(target.height, 50);
+});
+
+test('findStartThumbnail rejects full-viewport Start matches with unrelated images', async () => {
+  const thumb = makeElement({ attrs: { src: 'unrelated.png' }, rect: { left: 20, top: 20, width: 100, height: 60 } });
+  thumb.kind = 'thumb';
+  const fullViewport = makeElement({
+    text: 'Start creating or drop media',
+    rect: { width: 1920, height: 963 },
+    children: [thumb],
+  });
+  assert.equal(await findStartThumbnail(makeElementsPage([fullViewport])), null);
+});
+
+test('findStartThumbnail accepts a real thumbnail near the compact Start chip', async () => {
+  const thumb = makeElement({ attrs: { src: '001-demo.png' }, rect: { width: 42, height: 42 } });
+  thumb.kind = 'thumb';
+  const start = makeElement({ text: 'Start', rect: { width: 50, height: 50 }, children: [thumb] });
+  assert.deepEqual(await findStartThumbnail(makeElementsPage([start])), {
+    kind: 'thumbnail',
+    source: 'start slot',
+  });
+});
+
 test('generateOne throws when the start frame never attaches to the Start slot', async () => {
   const dir = tempDir('flow-noframe-');
   const imagePath = path.join(dir, '001-demo.png');
   fs.writeFileSync(imagePath, Buffer.alloc(1024));
   const calls = [];
-  const page = makePage(calls, {
-    fileInput: { uploadFile: async () => {} },
-  });
+  const page = makePage(calls);
 
   await assert.rejects(
     () => generateOne({
@@ -308,6 +460,12 @@ test('generateOne throws when the start frame never attaches to the Start slot',
       options: {
         classifyPage: async () => null,
         readVideoModeText: async () => 'Video · 4s 16:9 Generating will use 100 credits',
+        findUploadControl: async () => ({ x: 10, y: 11 }),
+        waitForMediaPickerDialog: async () => true,
+        dismissUploadNotice: false,
+        uploadMediaThroughPicker: async () => ({ mode: 'dialog-file-chooser' }),
+        selectUploadedMediaTile: async () => ({ x: 12, y: 13 }),
+        addUploadedMediaToPrompt: async () => ({ x: 14, y: 15 }),
         findStartThumbnail: async () => null,
       },
     }),
@@ -569,6 +727,15 @@ test('generateOne completes via reload/rescan after a failed card and downloads 
       }),
       findPromptControl: async () => ({ x: 20, y: 30 }),
       findSubmitControl: async () => ({ x: 40, y: 50 }),
+      findUploadControl: async () => ({ x: 10, y: 11 }),
+      waitForMediaPickerDialog: async () => true,
+      dismissUploadNotice: false,
+      uploadMediaThroughPicker: async (_page, uploadedPath) => {
+        calls.push(['pickerUpload', uploadedPath]);
+        return { mode: 'dialog-file-chooser' };
+      },
+      selectUploadedMediaTile: async () => ({ x: 12, y: 13 }),
+      addUploadedMediaToPrompt: async () => ({ x: 14, y: 15 }),
       findDownloadTarget: async () => null,
       failedTileGraceMs: 0,
       timeoutMs: 50,

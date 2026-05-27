@@ -233,20 +233,22 @@ async function waitForFlowReady(page, options = {}) {
   return true;
 }
 
-async function findFileInput(page) {
-  return page.$('input[type="file"]').catch(() => null);
-}
-
 async function findStartFrameDropTarget(page) {
   if (!page || typeof page.evaluate !== 'function') return null;
-  return page.evaluate(() => {
-    const nodes = Array.from(document.querySelectorAll('[role="button"], button, label'));
+  return page.evaluate((slotConfig) => {
+    const textRe = new RegExp(slotConfig.textReSource, slotConfig.textReFlags);
+    const nodes = Array.from(document.querySelectorAll('[role="button"], button, label, div'));
     const visible = (el) => {
       if (!el || !(el instanceof Element)) return false;
       const style = window.getComputedStyle(el);
       if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
       const rect = el.getBoundingClientRect();
-      return rect.width >= 100 && rect.height >= 100 && rect.bottom >= 0 && rect.right >= 0;
+      return rect.width >= slotConfig.minW
+        && rect.height >= slotConfig.minH
+        && rect.width <= slotConfig.maxW
+        && rect.height <= slotConfig.maxH
+        && rect.bottom >= 0
+        && rect.right >= 0;
     };
 
     const candidates = [];
@@ -259,18 +261,26 @@ async function findStartFrameDropTarget(page) {
         el.textContent,
       ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
       const rect = el.getBoundingClientRect();
-      if (label && !/start|frame|drop|media|upload/.test(label)) continue;
+      if (!label || !textRe.test(label)) continue;
       candidates.push({
         text: label.slice(0, 240),
         x: Math.round(rect.left + rect.width / 2),
         y: Math.round(rect.top + rect.height / 2),
         width: Math.round(rect.width),
         height: Math.round(rect.height),
+        exact: label === 'start',
       });
     }
 
-    candidates.sort((a, b) => a.x - b.x || b.width * b.height - a.width * a.height);
+    candidates.sort((a, b) => Number(b.exact) - Number(a.exact) || a.x - b.x || b.width * b.height - a.width * a.height);
     return candidates[0] || null;
+  }, {
+    textReSource: flowUi.START_SLOT.textRe.source,
+    textReFlags: flowUi.START_SLOT.textRe.flags,
+    minW: flowUi.START_SLOT.minW,
+    minH: flowUi.START_SLOT.minH,
+    maxW: flowUi.START_SLOT.maxW,
+    maxH: flowUi.START_SLOT.maxH,
   }).catch(() => null);
 }
 
@@ -336,6 +346,38 @@ async function configureVideoMode(page, options = {}) {
   return true;
 }
 
+// Ensure the page is inside a Flow project composer rather than the project-list
+// dashboard. generateOne's entry URL is the bare /tools/flow dashboard whenever
+// an item has no stored flowProjectUrl yet (i.e. a clean state / first run); the
+// dashboard exposes no mode toggle, upload control, or prompt field, so Flow
+// must be taken into a project first. Clicking "New project" lands in a fresh
+// composer — and because each item bootstraps its own project, sequential clips
+// never collide on the same project's completed tiles. When the entry URL was
+// already a /project/<id> (the reuse path), this is a no-op. Returns the
+// composer URL, or null if it could not bootstrap (verifyVideoMode /
+// detectBlocker downstream then report the real reason).
+async function ensureProjectComposer(page, options = {}) {
+  if (options.ensureProjectComposer === false) return null;
+  if (typeof options.ensureProjectComposer === 'function') {
+    return options.ensureProjectComposer(page, options);
+  }
+
+  const currentUrl = typeof page.url === 'function' ? page.url() : '';
+  if (/\/project\//.test(currentUrl)) return currentUrl;
+
+  const opened = await clickVisibleButton(page, /new project/i);
+  if (!opened) return null;
+
+  if (typeof page.waitForFunction === 'function') {
+    await page.waitForFunction(
+      () => /\/project\//.test(location.href),
+      { timeout: Number.isFinite(options.projectNavTimeoutMs) ? options.projectNavTimeoutMs : 30_000 }
+    ).catch(() => {});
+  }
+  await waitForFlowReady(page, options).catch(() => {});
+  return typeof page.url === 'function' ? page.url() : null;
+}
+
 async function readBodyText(page) {
   if (!page || typeof page.evaluate !== 'function') return '';
   return page.evaluate(() => {
@@ -355,8 +397,23 @@ async function verifyVideoMode(page, options = {}) {
   const creditsMatch = bodyText.match(/generating will use (\d+) credits/i);
   const credits = creditsMatch ? Number.parseInt(creditsMatch[1], 10) : null;
 
-  if (!videoModeConfirmed || credits === null || !(credits > 0)) {
-    throw new FlowAdapterError('Flow is still in image mode (0 credits) — video mode not selected', {
+  // The "Video · 4s" toggle is the reliable signal that the composer is in video
+  // mode. The "generating will use N credits" string only surfaces once a
+  // generation is staged (after the start frame + motion prompt) — which is
+  // AFTER this pre-upload check — so a fresh composer legitimately shows no
+  // credits text yet and must NOT fail here. A genuine out-of-credits /
+  // ineligible account is caught by detectBlocker (quota/subscription banners)
+  // run immediately after this step.
+  if (!videoModeConfirmed) {
+    throw new FlowAdapterError('Flow is still in image mode — video mode not selected', {
+      state: 'failed_ui',
+      exitCode: EXIT_CODES.ui,
+      stage: 'verify_video_mode',
+    });
+  }
+  // When Flow DOES surface an explicit credit cost, honour a hard zero as a block.
+  if (credits !== null && credits <= 0) {
+    throw new FlowAdapterError('Flow shows 0 credits for video generation', {
       state: 'failed_ui',
       exitCode: EXIT_CODES.ui,
       stage: 'verify_video_mode',
@@ -370,7 +427,8 @@ async function findStartThumbnail(page, options = {}) {
     return options.findStartThumbnail(page, options);
   }
   if (!page || typeof page.evaluate !== 'function') return null;
-  return page.evaluate(() => {
+  return page.evaluate((slotConfig) => {
+    const textRe = new RegExp(slotConfig.textReSource, slotConfig.textReFlags);
     const visible = (el) => {
       if (!el || !(el instanceof Element)) return false;
       const style = window.getComputedStyle(el);
@@ -378,26 +436,58 @@ async function findStartThumbnail(page, options = {}) {
       const rect = el.getBoundingClientRect();
       return rect.width >= 8 && rect.height >= 8 && rect.bottom >= 0 && rect.right >= 0;
     };
+    const slotVisible = (el) => {
+      if (!visible(el)) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= slotConfig.minW
+        && rect.height >= slotConfig.minH
+        && rect.width <= slotConfig.maxW
+        && rect.height <= slotConfig.maxH;
+    };
+    const boundedContainer = (el) => {
+      if (!visible(el)) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width <= 260 && rect.height <= 260 && rect.width < window.innerWidth * 0.5 && rect.height < window.innerHeight * 0.5;
+    };
+    const hasThumb = (root) => {
+      if (!boundedContainer(root)) return null;
+      const thumb = root.querySelector('img[src], [style*="background-image"], video[src]');
+      if (thumb && visible(thumb)) {
+        return { kind: 'thumbnail', source: 'start slot' };
+      }
+      const label = [
+        root.getAttribute('aria-label'),
+        root.getAttribute('title'),
+        root.textContent,
+      ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+      const filenameMatch = label.match(/[\w.-]+\.(?:png|jpe?g|webp|gif|bmp)\b/);
+      if (filenameMatch) return { kind: 'filename', text: filenameMatch[0] };
+      return null;
+    };
 
     const zones = Array.from(document.querySelectorAll('[role="button"], button, label, div'));
     for (const zone of zones) {
-      if (!visible(zone)) continue;
+      if (!slotVisible(zone)) continue;
       const zoneLabel = [
         zone.getAttribute('aria-label'),
         zone.getAttribute('title'),
         zone.textContent,
       ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
-      if (!/start/.test(zoneLabel)) continue;
-      const thumb = zone.querySelector('img[src], [style*="background-image"], video[src]');
-      if (thumb && visible(thumb)) {
-        return { kind: 'thumbnail', source: zoneLabel.slice(0, 120) };
-      }
-      const filenameMatch = zoneLabel.match(/[\w.-]+\.(?:png|jpe?g|webp|gif|bmp)\b/);
-      if (filenameMatch) {
-        return { kind: 'filename', text: filenameMatch[0] };
+      if (!zoneLabel || !textRe.test(zoneLabel)) continue;
+      let root = zone;
+      for (let depth = 0; root && depth <= 2; depth += 1, root = root.parentElement) {
+        const found = hasThumb(root);
+        if (found) return found;
       }
     }
     return null;
+  }, {
+    textReSource: flowUi.START_SLOT.textRe.source,
+    textReFlags: flowUi.START_SLOT.textRe.flags,
+    minW: flowUi.START_SLOT.minW,
+    minH: flowUi.START_SLOT.minH,
+    maxW: flowUi.START_SLOT.maxW,
+    maxH: flowUi.START_SLOT.maxH,
   }).catch(() => null);
 }
 
@@ -487,6 +577,187 @@ async function reloadAndRescan(page, options = {}) {
   return findCompletedTile(page, options);
 }
 
+async function waitForMediaPickerDialog(page, options = {}) {
+  if (typeof options.waitForMediaPickerDialog === 'function') {
+    return options.waitForMediaPickerDialog(page, options);
+  }
+  if (!page || typeof page.waitForFunction !== 'function') return true;
+  const timeout = Number.isFinite(options.mediaDialogTimeoutMs) ? options.mediaDialogTimeoutMs : 10_000;
+  return page.waitForFunction(() => {
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+    return dialogs.some((dialog) => {
+      const style = window.getComputedStyle(dialog);
+      const rect = dialog.getBoundingClientRect();
+      const text = (dialog.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && rect.width >= 100
+        && rect.height >= 100
+        && /(upload media|add to prompt|recent|uploads|images)/.test(text);
+    });
+  }, { timeout }).catch(() => false);
+}
+
+async function findDialogButton(page, matcher) {
+  if (!page || typeof page.evaluate !== 'function') return null;
+  return page.evaluate((source) => {
+    const pattern = new RegExp(source, 'i');
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+    const visible = (el) => {
+      if (!el || !(el instanceof Element)) return false;
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && rect.width >= 4
+        && rect.height >= 4
+        && rect.bottom >= 0
+        && rect.right >= 0;
+    };
+
+    for (const root of dialogs) {
+      if (!visible(root)) continue;
+      const nodes = Array.from(root.querySelectorAll('button, [role="button"], label, div, span'));
+      for (const el of nodes) {
+        if (!visible(el)) continue;
+        const label = [
+          el.getAttribute('aria-label'),
+          el.getAttribute('title'),
+          el.textContent,
+        ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+        if (!pattern.test(label)) continue;
+        const rect = el.getBoundingClientRect();
+        return {
+          text: label.slice(0, 240),
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+        };
+      }
+    }
+    return null;
+  }, matcher.source || String(matcher)).catch(() => null);
+}
+
+async function clickDialogButton(page, matcher) {
+  if (!page || typeof page.mouse?.click !== 'function') return null;
+  const target = await findDialogButton(page, matcher);
+  if (!target) return null;
+  await page.mouse.click(target.x, target.y, { delay: 20 });
+  return target;
+}
+
+async function dismissUploadNotice(page, options = {}) {
+  if (options.dismissUploadNotice === false) return null;
+  if (typeof options.dismissUploadNotice === 'function') {
+    return options.dismissUploadNotice(page, options);
+  }
+  const clicked = await clickDialogButton(page, /^(i agree|agree|accept|got it)$/i);
+  if (clicked) await sleep(Number.isFinite(options.noticeSettleMs) ? options.noticeSettleMs : 500);
+  return clicked;
+}
+
+async function findDialogFileInput(page) {
+  if (!page || typeof page.$$ !== 'function') return null;
+  const handles = await page.$$('[role="dialog"] input[type="file"]').catch(() => []);
+  return handles.find(handle => handle && typeof handle.uploadFile === 'function') || null;
+}
+
+async function uploadMediaThroughPicker(page, imagePath, options = {}) {
+  if (typeof options.uploadMediaThroughPicker === 'function') {
+    return options.uploadMediaThroughPicker(page, imagePath, options);
+  }
+  const dialogInput = await findDialogFileInput(page);
+  if (dialogInput) {
+    await dialogInput.uploadFile(imagePath);
+    return { mode: 'dialog-file-input' };
+  }
+
+  const uploadControl = await findDialogButton(page, /upload media|upload|choose file|add media/i);
+  if (!uploadControl) return null;
+
+  if (typeof page.waitForFileChooser === 'function') {
+    const chooserPromise = page.waitForFileChooser({ timeout: options.fileChooserTimeoutMs || 10_000 });
+    await page.mouse.click(uploadControl.x, uploadControl.y, { delay: 20 });
+    const chooser = await chooserPromise.catch(() => null);
+    if (chooser && typeof chooser.accept === 'function') {
+      await chooser.accept([imagePath]);
+      return { mode: 'dialog-file-chooser', control: uploadControl };
+    }
+  } else if (typeof page.mouse?.click === 'function') {
+    await page.mouse.click(uploadControl.x, uploadControl.y, { delay: 20 });
+  }
+
+  const postClickInput = await findDialogFileInput(page);
+  if (postClickInput) {
+    await postClickInput.uploadFile(imagePath);
+    return { mode: 'dialog-file-input-after-click', control: uploadControl };
+  }
+  return null;
+}
+
+async function selectUploadedMediaTile(page, imagePath, options = {}) {
+  if (typeof options.selectUploadedMediaTile === 'function') {
+    return options.selectUploadedMediaTile(page, imagePath, options);
+  }
+  if (!page || typeof page.evaluate !== 'function' || typeof page.mouse?.click !== 'function') return null;
+  const basename = path.basename(imagePath).toLowerCase();
+  const target = await page.evaluate((name) => {
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+    const visible = (el) => {
+      if (!el || !(el instanceof Element)) return false;
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && rect.width >= 12
+        && rect.height >= 12
+        && rect.bottom >= 0
+        && rect.right >= 0;
+    };
+
+    const candidates = [];
+    for (const root of dialogs) {
+      if (!visible(root)) continue;
+      const nodes = Array.from(root.querySelectorAll('button, [role="button"], img, [aria-label], div'));
+      for (const el of nodes) {
+        if (!visible(el)) continue;
+        const label = [
+          el.getAttribute('aria-label'),
+          el.getAttribute('title'),
+          el.getAttribute('alt'),
+          el.getAttribute('src'),
+          el.textContent,
+        ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+        const rect = el.getBoundingClientRect();
+        const hasImage = el.tagName.toLowerCase() === 'img'
+          || Boolean(el.querySelector && el.querySelector('img, [style*="background-image"]'))
+          || /(?:png|jpe?g|webp|gif|bmp)/i.test(label);
+        if (label.includes(name)) {
+          return {
+            text: label.slice(0, 240),
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+          };
+        }
+        if (hasImage && !/upload media|add to prompt|recent|images|uploads/.test(label)) {
+          candidates.push({
+            text: label.slice(0, 240),
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+            area: Math.round(rect.width * rect.height),
+          });
+        }
+      }
+    }
+    candidates.sort((a, b) => b.area - a.area);
+    return candidates[0] || null;
+  }, basename).catch(() => null);
+
+  if (!target) return null;
+  await page.mouse.click(target.x, target.y, { delay: 20 });
+  return target;
+}
+
 async function decorateAndThrow(page, options, stage, message, meta = {}) {
   const screenshotPath = await saveFailureScreenshot(page, {
     screenshotsDir: options.screenshotsDir,
@@ -497,37 +768,52 @@ async function decorateAndThrow(page, options, stage, message, meta = {}) {
 }
 
 async function uploadStartFrame(page, imagePath, options, stage = 'upload_start_frame') {
-  const directInput = await findFileInput(page);
-  if (directInput && typeof directInput.uploadFile === 'function') {
-    await directInput.uploadFile(imagePath);
-    return { mode: 'file-input' };
-  }
-
   const uploadBox = typeof options.findUploadControl === 'function'
     ? await options.findUploadControl(page, options)
-    : (await findClickableByText(page, UPLOAD_TEXTS) || await findStartFrameDropTarget(page));
+    : await findStartFrameDropTarget(page);
 
   if (!uploadBox) {
-    await decorateAndThrow(page, options, stage, 'could not find an upload control', {
+    await decorateAndThrow(page, options, stage, 'could not find the Start frame slot', {
       state: 'failed_ui',
       exitCode: EXIT_CODES.ui,
     });
   }
 
-  if (typeof page.waitForFileChooser === 'function') {
-    const chooserPromise = page.waitForFileChooser({ timeout: options.fileChooserTimeoutMs || 10_000 });
-    await page.mouse.click(uploadBox.x, uploadBox.y, { delay: 20 });
-    const chooser = await chooserPromise.catch(() => null);
-    if (chooser && typeof chooser.accept === 'function') {
-      await chooser.accept([imagePath]);
-      return { mode: 'file-chooser', control: uploadBox };
-    }
+  await page.mouse.click(uploadBox.x, uploadBox.y, { delay: 20 });
+  await waitForMediaPickerDialog(page, options);
+  await dismissUploadNotice(page, options);
+
+  const upload = await uploadMediaThroughPicker(page, imagePath, options);
+  if (!upload) {
+    await decorateAndThrow(page, options, stage, 'could not upload media through the Start frame picker', {
+      state: 'failed_ui',
+      exitCode: EXIT_CODES.ui,
+    });
   }
 
-  await decorateAndThrow(page, options, stage, 'file chooser did not open for upload', {
-    state: 'failed_ui',
-    exitCode: EXIT_CODES.ui,
-  });
+  await dismissUploadNotice(page, options);
+  await sleep(Number.isFinite(options.mediaUploadSettleMs) ? options.mediaUploadSettleMs : 1500);
+
+  const selected = await selectUploadedMediaTile(page, imagePath, options);
+  if (!selected) {
+    await decorateAndThrow(page, options, stage, 'could not select uploaded media in the Start frame picker', {
+      state: 'failed_ui',
+      exitCode: EXIT_CODES.ui,
+    });
+  }
+
+  const added = typeof options.addUploadedMediaToPrompt === 'function'
+    ? await options.addUploadedMediaToPrompt(page, options)
+    : await clickDialogButton(page, /add to prompt/i);
+  if (!added) {
+    await decorateAndThrow(page, options, stage, 'could not add uploaded media to the Start frame prompt', {
+      state: 'failed_ui',
+      exitCode: EXIT_CODES.ui,
+    });
+  }
+
+  await sleep(Number.isFinite(options.startFrameSettleMs) ? options.startFrameSettleMs : 1500);
+  return { mode: 'start-slot-picker', control: uploadBox, upload, selected, added };
 }
 
 async function enterMotionPrompt(page, motion, options, stage = 'enter_motion') {
@@ -885,6 +1171,7 @@ async function generateOne({
   const classifyPageFn = typeof options.classifyPage === 'function'
     ? options.classifyPage
     : classifyPage;
+  await ensureProjectComposer(page, { ...options, item });
   await configureVideoMode(page, options);
   await verifyVideoMode(page, { ...options, item });
   const initialBlocker = await detectBlocker(page, classifyPageFn);
@@ -971,13 +1258,17 @@ module.exports = {
   UPLOAD_TEXTS,
   awaitCompletedTile,
   buildScreenshotPath,
+  clickDialogButton,
   clickVisibleButton,
   configureVideoMode,
   decorateAndThrow,
   detectBlocker,
+  dismissUploadNotice,
+  ensureProjectComposer,
   enterMotionPrompt,
   findClickableByText,
   findCompletedTile,
+  findDialogButton,
   findDownloadTarget,
   findStartFrameDropTarget,
   findStartThumbnail,
@@ -998,9 +1289,12 @@ module.exports = {
   runDownloadHelper,
   safePart,
   saveFailureScreenshot,
+  selectUploadedMediaTile,
   submitGeneration,
+  uploadMediaThroughPicker,
   uploadStartFrame,
   validateVideoFile,
+  waitForMediaPickerDialog,
   waitForCompletion,
   waitForFlowReady,
 };

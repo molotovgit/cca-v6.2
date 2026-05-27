@@ -15,10 +15,11 @@ Obsidian-friendly entry point for the workspace memory layer.
 ## Current status (2026-05-27)
 - **All four ROADMAP cleanup phases are complete** (workspace setup, video stabilization, browser/account resilience, end-to-end coverage). CI gate (`.github/workflows/ci.yml`) runs Node + Python tests on every push; suite green (Node 309/0, Python 400 pass / 2 xfail).
 - **Image generation works** (Gemini, browser-driven) and is production-usable.
-- **Flow video plumbing is proven live** — image → Flow → saved MP4 (`generateOne` runs end-to-end: mode-select, start-frame upload, submit, reload/rescan, completed-tile discovery, MP4 download, state=`saved`).
+- **Flow video plumbing is proven live** — image -> Flow -> saved MP4 (`generateOne` runs end-to-end: mode-select, start-frame upload, submit, reload/rescan, completed-tile discovery, MP4 download, state=`saved`).
+- **Flow start-frame binding fix is implemented/tested** — the adapter now binds through the real compact Start-slot picker, handles the first-upload Notice, selects the uploaded tile, and rejects false-positive full-page thumbnail matches.
 
 ## Single active priority
-- **Flow start-frame fidelity.** The live full-cycle proof saved an MP4, but Flow rendered a *prompt-generated* clip, **not our uploaded image animated** (frame 0 ≠ input PNG). `verifyStartFrameAttached` passed as a false positive. Fix = inspect the Flow `Start` drop zone live after upload, confirm true image-to-video mode, and harden the attachment check to match *our* file. Full finding in [WISHLIST.md](WISHLIST.md).
+- **Live Flow start-frame fidelity proof.** Run one credit-spending live clip to confirm the fixed Start-slot picker path makes frame 0 match the input PNG. Full finding in [WISHLIST.md](WISHLIST.md).
 
 ## Current video decision
 - Production video target is Google Flow / Veo via `labs.google/fx/tools/flow`, on Ultra/Pro Business Flow credits; Gemini app video is fallback/smoke only.

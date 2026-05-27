@@ -57,7 +57,14 @@ const CREDITS_RE = /generating will use (\d+) credits/i;
 
 const CREATE_ROW_VIDEO_RE = /video\s*[·.]\s*4s/i;
 
-const START_SLOT = { textRe: /start|frame|drop|media|upload/i, minW: 100, minH: 100, pick: 'leftmost' };
+const START_SLOT = {
+  textRe: /^start$/i,
+  minW: 32,
+  minH: 32,
+  maxW: 180,
+  maxH: 180,
+  pick: 'leftmost',
+};
 
 const MEDIA_TABS = {
   allMedia: /all media/i,

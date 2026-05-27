@@ -10,6 +10,7 @@ const {
   DURATION_TOKENS,
   COUNT_TOKENS,
   CREATE_ROW_VIDEO_RE,
+  START_SLOT,
   MEDIA_TABS,
   PROGRESS_RE,
   ACTIVITY_RE,
@@ -94,6 +95,13 @@ test('COUNT_TOKENS match the observed count chips', () => {
 
 test('CREATE_ROW_VIDEO_RE matches the configured create row', () => {
   assert.match('Agent Video · 4s crop_16_9 1x arrow_forward Create', CREATE_ROW_VIDEO_RE);
+});
+
+test('START_SLOT matches the compact live Start chip', () => {
+  assert.match('Start', START_SLOT.textRe);
+  assert.equal(START_SLOT.minW <= 50 && START_SLOT.minH <= 50, true);
+  assert.equal(START_SLOT.maxW >= 50 && START_SLOT.maxH >= 50, true);
+  assert.doesNotMatch('Start creating or drop media', START_SLOT.textRe);
 });
 
 test('MEDIA_TABS match the observed left-nav tab labels', () => {

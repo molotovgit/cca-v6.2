@@ -193,13 +193,13 @@ Tasks:
 - Done: add `submit_flow_videos.cjs --limit 1 --max-in-flight 1`.
 - Done: add blocker classification in `video_errors.cjs`.
 - Done: add provider-neutral MP4 download support in `video_download.cjs`.
-- Implemented skeleton: Flow project open/create.
-- Implemented skeleton: start-frame upload.
+- Done: Flow project open/create.
+- Done: start-frame upload through Flow's real Start-slot media picker.
 - Implemented skeleton: motion prompt entry.
 - Implemented skeleton: submit and wait-for-completion.
 - Implemented skeleton: MP4 download.
 - Implemented skeleton: screenshots on failed selectors or blockers.
-- Next: run one live Flow smoke test and tune selectors/error text from the real UI.
+- Next: run one live Flow fidelity test and confirm frame 0 matches the input PNG.
 
 Acceptance:
 
@@ -215,11 +215,15 @@ Live smoke result on 2026-05-26:
 - User observed after reload that two generated videos appeared in All Media, so
   the worker's failed-tile result was a false negative from the live polling
   view, not proof that Flow failed to render.
-- No MP4 was saved by automation yet.
-- The visible completed videos appeared prompt-generated, so the start-frame
-  image attachment is not proven.
-- Next tuning target is post-submit reload/rescan, completed-tile MP4 download,
-  and proof that the supplied source image is actually used as the start frame.
+- Later live work proved completed-tile reload/rescan and authenticated MP4
+  download; automation saved a valid MP4.
+- The saved MP4 was prompt-generated instead of an animation of the input image.
+  Root cause was upload binding to the toolbar media importer, not the Start
+  slot.
+- Current code fixes the binding path: click compact Start chip -> media picker
+  -> Notice handling -> upload/select tile -> Add to Prompt. Verification now
+  rejects full-page false positives. Pending: one live credit-spending fidelity
+  run to prove the supplied source image is actually used as frame 0.
 
 ### Phase 2: Sequential Batch
 
