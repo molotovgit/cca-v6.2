@@ -444,29 +444,36 @@ async function findStartThumbnail(page, options = {}) {
         && rect.width <= slotConfig.maxW
         && rect.height <= slotConfig.maxH;
     };
-    const boundedContainer = (el) => {
-      if (!visible(el)) return false;
-      const rect = el.getBoundingClientRect();
-      return rect.width <= 260 && rect.height <= 260 && rect.width < window.innerWidth * 0.5 && rect.height < window.innerHeight * 0.5;
-    };
-    const hasThumb = (root) => {
-      if (!boundedContainer(root)) return null;
-      const thumb = root.querySelector('img[src], [style*="background-image"], video[src]');
-      if (thumb && visible(thumb)) {
-        return { kind: 'thumbnail', source: 'start slot' };
-      }
-      const label = [
-        root.getAttribute('aria-label'),
-        root.getAttribute('title'),
-        root.textContent,
-      ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
-      const filenameMatch = label.match(/[\w.-]+\.(?:png|jpe?g|webp|gif|bmp)\b/);
-      if (filenameMatch) return { kind: 'filename', text: filenameMatch[0] };
-      return null;
+    const thumbIn = (root) => {
+      const thumb = root.querySelector && root.querySelector('img[src], [style*="background-image"], video[src]');
+      return thumb && visible(thumb) ? thumb : null;
     };
 
-    const zones = Array.from(document.querySelectorAll('[role="button"], button, label, div'));
-    for (const zone of zones) {
+    const nodes = Array.from(document.querySelectorAll('[role="button"], button, label, div'));
+
+    // Primary: anchor on the End slot — the Start slot is the slot-sized chip to
+    // its left on the same row. Once a frame binds, that chip renders the image
+    // and drops the literal "Start" text, so position relative to End (which
+    // stays empty/labelled) is the stable signal.
+    let endRect = null;
+    for (const el of nodes) {
+      if (!slotVisible(el)) continue;
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (/^end$/.test(t)) { endRect = el.getBoundingClientRect(); break; }
+    }
+    if (endRect) {
+      for (const el of nodes) {
+        if (!slotVisible(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.left < endRect.left && Math.abs(r.top - endRect.top) <= 40 && thumbIn(el)) {
+          return { kind: 'thumbnail', source: 'start slot' };
+        }
+      }
+    }
+
+    // Fallback: a slot-sized zone still labelled "start" holding a thumbnail or a
+    // filename, within <=2 ancestors (covers Flow label variants).
+    for (const zone of nodes) {
       if (!slotVisible(zone)) continue;
       const zoneLabel = [
         zone.getAttribute('aria-label'),
@@ -476,8 +483,11 @@ async function findStartThumbnail(page, options = {}) {
       if (!zoneLabel || !textRe.test(zoneLabel)) continue;
       let root = zone;
       for (let depth = 0; root && depth <= 2; depth += 1, root = root.parentElement) {
-        const found = hasThumb(root);
-        if (found) return found;
+        if (thumbIn(root)) return { kind: 'thumbnail', source: 'start slot' };
+        const label = [root.getAttribute('aria-label'), root.getAttribute('title'), root.textContent]
+          .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+        const fn = label.match(/[\w.-]+\.(?:png|jpe?g|webp|gif|bmp)\b/);
+        if (fn) return { kind: 'filename', text: fn[0] };
       }
     }
     return null;
@@ -615,9 +625,15 @@ async function findDialogButton(page, matcher) {
         && rect.right >= 0;
     };
 
+    // Only real clickable controls — NOT container <div>/<span>, whose
+    // textContent bubbles up descendant labels (the whole 780x580 dialog body
+    // matches /upload/ via its children) and would get clicked dead-center on
+    // the empty results area. Among matches, prefer the smallest by area so a
+    // compact button wins over any large wrapper that slipped through.
+    const matches = [];
     for (const root of dialogs) {
       if (!visible(root)) continue;
-      const nodes = Array.from(root.querySelectorAll('button, [role="button"], label, div, span'));
+      const nodes = Array.from(root.querySelectorAll('button, [role="button"], label'));
       for (const el of nodes) {
         if (!visible(el)) continue;
         const label = [
@@ -627,14 +643,17 @@ async function findDialogButton(page, matcher) {
         ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
         if (!pattern.test(label)) continue;
         const rect = el.getBoundingClientRect();
-        return {
+        matches.push({
           text: label.slice(0, 240),
           x: Math.round(rect.left + rect.width / 2),
           y: Math.round(rect.top + rect.height / 2),
-        };
+          area: Math.round(rect.width * rect.height),
+        });
       }
     }
-    return null;
+    matches.sort((a, b) => a.area - b.area);
+    if (!matches[0]) return null;
+    return { text: matches[0].text, x: matches[0].x, y: matches[0].y };
   }, matcher.source || String(matcher)).catch(() => null);
 }
 
@@ -672,7 +691,10 @@ async function uploadMediaThroughPicker(page, imagePath, options = {}) {
     return { mode: 'dialog-file-input' };
   }
 
-  const uploadControl = await findDialogButton(page, /upload media|upload|choose file|add media/i);
+  // Bare /upload/ also matches the "Uploads" tab — require the specific
+  // "Upload media" control (or an explicit chooser label) so we click the
+  // importer, not the tab.
+  const uploadControl = await findDialogButton(page, /upload media|choose file|add media/i);
   if (!uploadControl) return null;
 
   if (typeof page.waitForFileChooser === 'function') {
@@ -687,10 +709,15 @@ async function uploadMediaThroughPicker(page, imagePath, options = {}) {
     await page.mouse.click(uploadControl.x, uploadControl.y, { delay: 20 });
   }
 
-  const postClickInput = await findDialogFileInput(page);
-  if (postClickInput) {
+  // Flow's picker file input lives OUTSIDE the [role=dialog] subtree (it is the
+  // single global input), so fall back to it once the importer is armed.
+  let postClickInput = await findDialogFileInput(page);
+  if (!postClickInput && typeof page.$ === 'function') {
+    postClickInput = await page.$('input[type="file"]');
+  }
+  if (postClickInput && typeof postClickInput.uploadFile === 'function') {
     await postClickInput.uploadFile(imagePath);
-    return { mode: 'dialog-file-input-after-click', control: uploadControl };
+    return { mode: 'file-input-after-click', control: uploadControl };
   }
   return null;
 }
@@ -715,6 +742,7 @@ async function selectUploadedMediaTile(page, imagePath, options = {}) {
         && rect.right >= 0;
     };
 
+    const named = [];
     const candidates = [];
     for (const root of dialogs) {
       if (!visible(root)) continue;
@@ -729,26 +757,34 @@ async function selectUploadedMediaTile(page, imagePath, options = {}) {
           el.textContent,
         ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
         const rect = el.getBoundingClientRect();
+        const area = Math.round(rect.width * rect.height);
         const hasImage = el.tagName.toLowerCase() === 'img'
           || Boolean(el.querySelector && el.querySelector('img, [style*="background-image"]'))
           || /(?:png|jpe?g|webp|gif|bmp)/i.test(label);
         if (label.includes(name)) {
-          return {
+          named.push({
             text: label.slice(0, 240),
             x: Math.round(rect.left + rect.width / 2),
             y: Math.round(rect.top + rect.height / 2),
-          };
+            area,
+          });
+          continue;
         }
         if (hasImage && !/upload media|add to prompt|recent|images|uploads/.test(label)) {
           candidates.push({
             text: label.slice(0, 240),
             x: Math.round(rect.left + rect.width / 2),
             y: Math.round(rect.top + rect.height / 2),
-            area: Math.round(rect.width * rect.height),
+            area,
           });
         }
       }
     }
+    // Prefer the SMALLEST element carrying the filename — the actual tile/row,
+    // not the big dialog container whose textContent merely contains the name
+    // (clicking the container center selects nothing / the wrong target).
+    named.sort((a, b) => a.area - b.area);
+    if (named[0]) return { text: named[0].text, x: named[0].x, y: named[0].y };
     candidates.sort((a, b) => b.area - a.area);
     return candidates[0] || null;
   }, basename).catch(() => null);
@@ -765,6 +801,31 @@ async function decorateAndThrow(page, options, stage, message, meta = {}) {
     stage,
   });
   throw new FlowAdapterError(message, { ...meta, stage, screenshotPath });
+}
+
+// A freshly uploaded image must finish processing before the picker's
+// "Add to Prompt" button enables (a multi-MB PNG can take ~30s). Clicking it
+// while disabled is a silent no-op that leaves the Start slot empty. Poll the
+// button's disabled state until it is clickable.
+async function waitForAddToPromptEnabled(page, options = {}) {
+  if (options.waitForAddToPromptEnabled === false) return true;
+  if (typeof options.waitForAddToPromptEnabled === 'function') {
+    return options.waitForAddToPromptEnabled(page, options);
+  }
+  // Mock/unknown pages can't be polled — treat as ready so seam-driven tests pass.
+  if (!page || typeof page.waitForFunction !== 'function') return true;
+  const timeout = Number.isFinite(options.addToPromptTimeoutMs) ? options.addToPromptTimeoutMs : 90_000;
+  return page.waitForFunction(() => {
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+    for (const dialog of dialogs) {
+      const rect = dialog.getBoundingClientRect();
+      if (rect.width < 100 || rect.height < 100) continue;
+      const btn = Array.from(dialog.querySelectorAll('button, [role="button"]'))
+        .find(b => /add to prompt/i.test((b.innerText || b.getAttribute('aria-label') || '')));
+      if (btn && btn.disabled !== true && btn.getAttribute('aria-disabled') !== 'true') return true;
+    }
+    return false;
+  }, { timeout, polling: 500 }).then(() => true).catch(() => false);
 }
 
 async function uploadStartFrame(page, imagePath, options, stage = 'upload_start_frame') {
@@ -792,11 +853,24 @@ async function uploadStartFrame(page, imagePath, options, stage = 'upload_start_
   }
 
   await dismissUploadNotice(page, options);
-  await sleep(Number.isFinite(options.mediaUploadSettleMs) ? options.mediaUploadSettleMs : 1500);
 
-  const selected = await selectUploadedMediaTile(page, imagePath, options);
+  // The uploaded tile can take a moment to appear in the picker — retry select.
+  const selectDeadline = Date.now() + (Number.isFinite(options.mediaSelectTimeoutMs) ? options.mediaSelectTimeoutMs : 20_000);
+  let selected = await selectUploadedMediaTile(page, imagePath, options);
+  while (!selected && Date.now() < selectDeadline) {
+    await sleep(1500);
+    selected = await selectUploadedMediaTile(page, imagePath, options);
+  }
   if (!selected) {
     await decorateAndThrow(page, options, stage, 'could not select uploaded media in the Start frame picker', {
+      state: 'failed_ui',
+      exitCode: EXIT_CODES.ui,
+    });
+  }
+
+  const addReady = await waitForAddToPromptEnabled(page, options);
+  if (!addReady) {
+    await decorateAndThrow(page, options, stage, 'uploaded media did not finish processing (Add to Prompt stayed disabled)', {
       state: 'failed_ui',
       exitCode: EXIT_CODES.ui,
     });

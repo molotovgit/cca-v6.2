@@ -14,8 +14,8 @@ All four cleanup-cycle phases shipped to `DaddysBranch` and guarded by CI (`node
 
 ## Active
 
-1. **Live Flow start-frame fidelity proof** (top priority). The root cause is fixed in code: upload now goes through Flow's real compact Start-slot picker, first-upload Notice handling is present, and verification rejects full-page false positives. Run one live clip to prove the rendered frame 0 matches the input PNG. See [WISHLIST.md](WISHLIST.md) "Flow start-frame fidelity" for the full finding + next steps.
-2. After start-frame is honored: one clean live `generateOne`, then a small **live sequential batch** (`run_videos_autonomous.cjs --limit <N>`), then **live concurrency tuning** (`--max-in-flight 2/3/4`) against real failed-tile rates.
+1. **Flow start-frame: post-submit download discovery** (top priority, the one open blocker). The start-frame **bind now works** (mode → real Start-slot picker → ~30 s processing wait → tile select → Add to Prompt → fail-closed verify; confirmed live credit-free). But the 2026-05-28 live run, after submitting the generation, failed at `findCompletedTile`/`awaitCompletedTile` (`failed_download` "selector unknown"). Earlier text-to-video runs downloaded fine, so investigate the Frames-to-Video completed-tile reload/timing; also stop a download failure from re-generating (it burns credits). Then confirm frame 0 == input PNG. Full detail in [WISHLIST.md](WISHLIST.md).
+2. After fidelity is proven: a small **live sequential batch** (`run_videos_autonomous.cjs --limit <N>`), then **live concurrency tuning** (`--max-in-flight 2/3/4`) against real failed-tile rates.
 3. **Notion video upload** — currently image-only by design; wire MP4 upload once the one-clip path is faithful.
 
 Exit criteria: a generated image is animated *as itself* into a saved MP4, then a batch runs unattended with account rotation and surfaces clear reasons on failure.
